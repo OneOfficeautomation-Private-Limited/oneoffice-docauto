@@ -82,6 +82,20 @@ textarea{min-height:90px;resize:vertical}
 .switch span:before{content:"";position:absolute;width:16px;height:16px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s}
 .switch input:checked+span{background:var(--grad)}.switch input:checked+span:before{transform:translateX(18px)}
 .option-card{border-top:4px solid var(--c);}
+.route{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:12px 0 4px;counter-reset:rs}
+.rstep{position:relative;border:1px solid var(--line);border-left:4px solid var(--c);border-radius:10px;padding:9px 10px 10px;background:var(--panel);min-width:0}
+.rstep.off{opacity:.6;background:var(--panel2)}
+.rstep b{display:block;font-size:13.5px;margin:2px 0 3px}.rstep .small{line-height:1.4}
+.rstep .rn{counter-increment:rs;font-size:11px;font-weight:700;color:var(--c);text-transform:uppercase;letter-spacing:.04em}
+.rstep .rn:before{content:counter(rs) " · "}
+.rstep .pill{margin:6px 4px 0 0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.rctl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) auto;gap:12px;align-items:end;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.rctl label.f{margin:0}
+.costs td.num,.costs th.num{text-align:right;white-space:nowrap}
+.costs .tot td{font-weight:700;border-top:2px solid var(--line)}
+.cin{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}
+@media (max-width:1100px){.route{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:700px){.route,.rctl,.cin{grid-template-columns:minmax(0,1fr)}}
 .option-card h3{margin:0 0 4px;font-size:16px}
 .big{font-size:26px;font-weight:700}
 .engine{display:flex;flex-direction:column}
@@ -261,8 +275,18 @@ async function loadCore(force=false){
     const p = await api("/providers"); S.providers = p.providers; S.profile = p.deploymentProfile; S.packs = p.optionPacks;
   }
   if (!S.settings || force) S.settings = await api("/admin/settings");
+  if (!S.prices || force) { const c = await api("/costs").catch(()=>null); S.prices = c ? c.prices : {}; S.claudeModel = c ? c.claudeModel : ""; }
+}
+const usd = v => v == null ? "–" : "$" + (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(2));
+function priceText(p){
+  const pr = (S.prices||{})[p.id]; if (!pr) return "";
+  const parts = [];
+  if (pr.ocr != null) parts.push(pr.ocr === 0 ? "OCR free" : `OCR ≈ ${usd(pr.ocr)}`);
+  if (pr.extract != null) parts.push(pr.extract === 0 ? "fields free" : `fields ≈ ${usd(pr.extract)}${p.id==="claude"?` (${esc(S.claudeModel)}, estimate)`:""}`);
+  return parts.length ? parts.join(" · ") + " per 1,000 pages" : "";
 }
 function statusOf(p){
+  if (!p.allowedByPolicy && /opt-in/.test(p.policyReason||"")) return {cls:"mute", text:"Needs cloud opt-in", why:p.policyReason};
   if (!p.allowedByPolicy) return {cls:"bad", text:"Blocked by policy", why:p.policyReason};
   if (p.available) return {cls:"ok", text:"Ready", why:p.reason};
   if (/not enabled/.test(p.reason)) return {cls:"mute", text:"Option off", why:p.reason};
@@ -314,25 +338,113 @@ routes.overview = async (el) => {
   }).join("");
   el.innerHTML = `
   <div class="head"><div class="grow"><h1><span class="onet">One</span>Engine overview</h1>
-    <p>The three engine options that learning instances can use. Switch an option off to hide it from every instance.</p></div>
+    <p>The three engine options and how DocFlow routes every page between them: free local engines first, paid cloud only for weak pages and only with opt-in.</p></div>
     <div class="row"><span class="pill mute">Profile: ${esc(profileLabel(S.profile))}</span><a class="btn primary" href="#/process">Process a document</a></div></div>
-  <div class="grid g3">${cards}</div>
+  ${routingCard()}
+  <div class="grid g3" style="margin-top:14px">${cards}</div>
   <div class="grid g2" style="margin-top:14px">
-    <div class="card"><div class="pad row"><b>Recent documents</b><span class="sp"></span><a class="small" href="#/process">New</a></div>
-      ${docs.length ? `<table><tr><th>File</th><th>Status</th><th>When</th></tr>${docs.map(d=>`<tr>
-        <td><a href="#/process/${d.id}">${esc(d.file_name)}</a></td>
-        <td>${docStatus(d)}</td><td class="muted small">${esc((d.created_at||"").slice(0,16).replace("T"," "))}</td></tr>`).join("")}</table>`
-        : '<div class="empty">No documents yet. Try one of the samples in the <code>samples</code> folder.</div>'}</div>
+    ${costCard()}
     <div class="card pad"><b>How the options work together</b>
       <ol class="small" style="padding-left:18px;margin:10px 0 0;line-height:1.7">
-        <li><b>OneCore</b> runs on this machine for free; use it for screens, clean scans and air-gapped customers.</li>
-        <li><b>OneConnect</b> adds commercial OCR/IDP (tables, handwriting, prebuilt invoice/ID models) with the customer's key or a resold key.</li>
-        <li><b>OneMind</b> reads any document against a field list you define in <a href="#/types">Document types</a>.</li>
-        <li>The <a href="#/settings">profile</a> decides which options may receive data; the router picks the cheapest allowed engine and falls back on errors.</li>
-        <li>Low-confidence fields go to the <a href="#/review">Review queue</a>.</li></ol></div>
-  </div>`;
+        <li><b>OneCore</b> runs on this machine for free; use it for screens, clean scans, digital PDFs and every pilot client.</li>
+        <li><b>OneConnect</b> adds commercial OCR/IDP (tables, handwriting, prebuilt invoice/ID models) for pages local engines read poorly.</li>
+        <li><b>OneMind</b> reads any document against a field list you define in <a href="#/doctypes">Document types</a>, with Claude or a self-hosted model.</li>
+        <li><b>Cloud opt-in</b> is the client's consent: while it is off, no document leaves this machine, whatever the <a href="#/settings">profile</a> allows.</li>
+        <li>Fields below the review threshold or failing a check go to <a href="#/review">One Desk</a>.</li></ol></div>
+  </div>
+  <div class="card" style="margin-top:14px"><div class="pad row"><b>Recent documents</b><span class="sp"></span><a class="small" href="#/process">New</a></div>
+    ${docs.length ? `<table><tr><th>File</th><th>Status</th><th>When</th></tr>${docs.map(d=>`<tr>
+      <td><a href="#/process/${d.id}">${esc(d.file_name)}</a></td>
+      <td>${docStatus(d)}</td><td class="muted small">${esc((d.created_at||"").slice(0,16).replace("T"," "))}</td></tr>`).join("")}</table>`
+      : '<div class="empty">No documents yet. Try one of the samples in the <code>samples</code> folder.</div>'}</div>`;
   el.querySelectorAll("[data-pack]").forEach(cb => cb.onchange = () => togglePack(cb.dataset.pack, cb.checked));
+  wireRouting(); wireCosts();
 };
+
+/* routing: the OCR strategy plan's chain, with each engine's live status */
+function prov(id){ return (S.providers||[]).find(p=>p.id===id); }
+function engPill(id){
+  if (!id) return '<span class="pill mute">Not set</span>';
+  const p = prov(id); if (!p) return `<span class="pill bad" title="unknown engine">${esc(id)} · unknown</span>`;
+  const s = statusOf(p);
+  return `<span class="pill ${s.cls}" title="${esc(s.why||"")}">${esc(p.displayName.split(" (")[0].split(" - ")[0])} · ${esc(s.text)}</span>`;
+}
+function routingCard(){
+  const optIn = String(fieldVal("DOCAUTO_CLOUD_OPT_IN")).toLowerCase()==="true";
+  const thr = parseFloat(fieldVal("DOCAUTO_ESCALATE_THRESHOLD")) || 0;
+  const local = (fieldVal("DOCAUTO_RETRY_LOCAL")||"").split(",").map(s=>s.trim()).filter(Boolean);
+  const cloud = fieldVal("DOCAUTO_ESCALATE_TO"), ocr = fieldVal("DOCAUTO_DEFAULT_OCR"), ext = fieldVal("DOCAUTO_DEFAULT_EXTRACTION");
+  const fieldThr = parseFloat(fieldVal("DOCAUTO_FIELD_THRESHOLD")) || 0.85;
+  const extP = prov(ext), extLocal = !extP || extP.runsLocally;
+  const cloudOpts = (S.providers||[]).filter(p=>p.kind==="ocr" && !p.runsLocally);
+  const step = (c, title, note, body, off=false) => `<div class="rstep ${off?"off":""}" style="--c:${c}"><div class="rn">${off?"skipped":"step"}</div><b>${title}</b><div class="small muted">${note}</div>${body}</div>`;
+  return `<div class="card pad" id="routing">
+    <div class="row"><b>How a document is routed</b>
+      <span class="pill ${optIn?"t2":"ok"}">${optIn?"Cloud opt-in on":"Local-only: nothing leaves this machine"}</span><span class="sp"></span>
+      <span class="muted small">Cloud opt-in</span><label class="switch" title="Client consent to send weak pages and fields to cloud engines"><input type="checkbox" id="rOptIn" ${optIn?"checked":""}><span></span></label></div>
+    <div class="route">
+      ${step("var(--muted)", "Text layer", "Digital PDFs are read directly: no OCR, no cost.", engPill("pdf-text"))}
+      ${step("var(--t1)", "Local OCR", "Every scanned page is read on this machine.", engPill(ocr))}
+      ${step("var(--t1)", `Retry pages under ${pct(thr)}`, "Weak pages are re-read locally, free. The better read wins.", local.length?local.map(engPill).join(""):'<span class="pill mute">None</span>', !thr)}
+      ${step("var(--t2)", "Cloud OCR, still weak", optIn?"Only pages still under the threshold. Costs per page.":"Needs cloud opt-in.", engPill(cloud), !optIn || !cloud)}
+      ${step(extLocal?"var(--t1)":"var(--t3)", "Fields", extLocal?"Local rules against the document type.":"AI reads the fields; values must cite the OCR text.", engPill(ext))}
+      ${step("var(--brand-violet)", "Checks & review", `Fields under ${pct(fieldThr)} or failing a check go to a person.`, '<a class="pill info" href="#/review">One Desk</a>')}
+    </div>
+    <div class="rctl">
+      <label class="f"><span>Retry pages below confidence</span><input type="number" id="rThr" step="0.01" min="0" max="1" value="${esc(thr)}"><em>The plan uses 0.85. 0 turns retries off.</em></label>
+      <label class="f"><span>Local retry engines</span><input type="text" id="rLocal" value="${esc(local.join(", "))}" placeholder="paddleocr"><em>Engine ids, in order.</em></label>
+      <label class="f"><span>Cloud engine for pages still weak</span><select id="rCloud"><option value="" ${!cloud?"selected":""}>(none)</option>${cloudOpts.map(p=>`<option value="${p.id}" ${p.id===cloud?"selected":""}>${esc(p.displayName)}</option>`).join("")}</select><em>Used only with cloud opt-in.</em></label>
+      <button class="btn primary" id="rSave">Save routing</button>
+    </div></div>`;
+}
+function wireRouting(){
+  $("#rOptIn").onchange = async e => {
+    const on = e.target.checked;
+    if (on && !confirm("Turn on cloud opt-in?\n\nWeak pages and field extraction may then be sent to the cloud engines configured in OneConnect and OneMind. Only do this for clients who agreed to it.")) { e.target.checked = false; return; }
+    try { await saveSettings({DOCAUTO_CLOUD_OPT_IN: on}, on ? "Cloud opt-in on" : "Local-only: cloud opt-in off"); route(); } catch(err){ toast(err.message, true); }
+  };
+  $("#rSave").onclick = async () => {
+    const thr = parseFloat($("#rThr").value);
+    if (isNaN(thr) || thr < 0 || thr > 1) { toast("Confidence must be between 0 and 1", true); return; }
+    const values = {DOCAUTO_ESCALATE_THRESHOLD: String(thr), DOCAUTO_ESCALATE_TO: $("#rCloud").value,
+      DOCAUTO_RETRY_LOCAL: $("#rLocal").value.split(",").map(s=>s.trim()).filter(Boolean).join(",")};
+    try { await saveSettings(values, "Routing saved and applied"); route(); } catch(err){ toast(err.message, true); }
+  };
+}
+
+/* cost estimate: the plan's example by default (10,000 pages, 20% to cloud OCR, 30% with fields) */
+function costCard(){
+  const cloudOpts = (S.providers||[]).filter(p=>p.kind==="ocr" && !p.runsLocally);
+  const ext = [["builtin-rules","Local rules (free)"],["azure-di","Azure prebuilt invoice"],["aws-textract","AWS AnalyzeExpense"],
+    ["claude:claude-sonnet-5-5","Claude Sonnet 5.5"],["claude:claude-opus-5-5","Claude Opus 5.5"],["claude:claude-haiku-5-5","Claude Haiku 5.5"],["llm-local","Self-hosted model (free)"]];
+  return `<div class="card pad" id="costs"><div class="row"><b>Monthly cost estimate</b><span class="sp"></span><span class="pill mute" title="Approximate list prices. Check each vendor's pricing before quoting.">list prices, approx.</span></div>
+    <div class="cin" style="margin-top:10px">
+      <label class="f"><span>Pages per month</span><input type="number" id="cPages" min="0" step="1000" value="10000"></label>
+      <label class="f"><span>Weak pages sent to cloud OCR (%)</span><input type="number" id="cCloud" min="0" max="100" value="20"></label>
+      <label class="f"><span>Cloud OCR engine</span><select id="cOcr">${cloudOpts.map(p=>`<option value="${p.id}" ${p.id==="azure-di"?"selected":""}>${esc(p.displayName)}</option>`).join("")}</select></label>
+      <label class="f"><span>Pages that need fields (%)</span><input type="number" id="cExt" min="0" max="100" value="30"></label>
+      <label class="f" style="grid-column:1/-1"><span>Field extraction</span><select id="cEng">${ext.map(([v,l])=>`<option value="${v}" ${v==="azure-di"?"selected":""}>${l}</option>`).join("")}</select></label>
+    </div><div id="cOut"><span class="spin"></span></div></div>`;
+}
+function wireCosts(){
+  let timer;
+  const run = async () => {
+    const [extraction, model] = $("#cEng").value.split(":");
+    const q = new URLSearchParams({pages: $("#cPages").value||0, cloudShare: ($("#cCloud").value||0)/100,
+      extractShare: ($("#cExt").value||0)/100, cloudOcr: $("#cOcr").value, extraction, optIn: true});
+    if (model) q.set("model", model);
+    try {
+      const r = await api("/costs?" + q), e = r.estimate;
+      $("#cOut").innerHTML = `<table class="costs"><tr><th>Step</th><th class="num">Pages</th><th class="num">Per 1,000</th><th class="num">Per month</th></tr>
+        ${e.lines.map(l=>`<tr><td>${esc(l.label)}</td><td class="num">${l.pages.toLocaleString()}</td><td class="num">${l.per1000==null?"contract":usd(l.per1000)}</td><td class="num">${l.usd==null?"–":usd(l.usd)}</td></tr>`).join("")}
+        <tr class="tot"><td>Total${e.complete?"":" (known prices only)"}</td><td></td><td class="num">${e.pages?usd(e.total/e.pages*1000):"–"}</td><td class="num">${usd(e.total)}</td></tr></table>
+        <p class="small muted" style="margin:8px 0 0">${r.cloudOptIn?"Cloud opt-in is on, so this is what the current routing would cost."
+          :"Cloud opt-in is off, so today this costs <b>$0</b>: every page stays local. The table shows the cost once a client opts in."} Plus the server for the local engines. Claude prices are estimates from tokens per page.</p>`;
+    } catch(err){ $("#cOut").innerHTML = `<div class="result bad">${esc(err.message)}</div>`; }
+  };
+  ["#cPages","#cCloud","#cExt","#cOcr","#cEng"].forEach(s => $(s).oninput = () => { clearTimeout(timer); timer = setTimeout(run, 250); });
+  run();
+}
 function docStatus(d){
   if (d.job_status==="failed") return '<span class="pill bad">Failed</span>';
   if (d.review_status==="pending") return '<span class="pill warn">Needs review</span>';
@@ -343,7 +455,7 @@ function docStatus(d){
 }
 async function saveSettings(values, msg="Saved"){
   const r = await api("/admin/settings", {method:"PUT", json:{values}});
-  S.providers = r.providers; S.profile = r.profile; S.settings = await api("/admin/settings");
+  S.providers = r.providers; S.profile = r.profile; S.settings = await api("/admin/settings"); S.prices = null;
   toast(Object.keys(r.changed).length ? msg : "No changes");
   return r;
 }
@@ -359,8 +471,8 @@ routes.option = async (el, pid) => {
   const deny = (fieldVal("DOCAUTO_DENY")||"").split(",").map(s=>s.trim()).filter(Boolean);
   const extra = {
     tier1_opensource: `<div class="card pad" style="margin-bottom:14px"><b>When to use</b><p class="small muted" style="margin:6px 0 0">Screen OCR on Citrix/RDP/legacy apps, clean printed documents, digital PDFs, and any customer that must stay offline. Free and unlimited. For poor scans or handwriting, escalate to OneConnect.</p></div>`,
-    tier2_cloud: `<div class="card pad" style="margin-bottom:14px"><b>Bring your own key or resell</b><p class="small muted" style="margin:6px 0 0">Enter the customer's own credentials below (billed by the vendor), or Oneoffice-owned keys for resold usage (metered in <a href="#/usage">Usage</a>). The deployment profile and allowed regions in <a href="#/settings">Settings</a> decide whether documents may be sent.</p></div>`,
-    tier3_ai: `<div class="card pad" style="margin-bottom:14px"><b>Template-free extraction</b><p class="small muted" style="margin:6px 0 0">The model receives OCR text (and optionally page images) plus the field list from a <a href="#/types">Document type</a>, and must cite the OCR lines for every value. Values not found in the text are flagged for review. Use <b>self-hosted</b> for on-prem customers, <b>cloud</b> for best accuracy.</p></div>`
+    tier2_cloud: `<div class="card pad" style="margin-bottom:14px"><b>Bring your own key or resell</b><p class="small muted" style="margin:6px 0 0">Enter the customer's own credentials below (billed by the vendor), or Oneoffice-owned keys for resold usage (metered in <a href="#/usage">Usage</a>). Nothing is sent until <b>cloud opt-in</b> is on (<a href="#/overview">Engine overview</a>); then the profile and allowed regions in <a href="#/settings">Settings</a> decide where documents may go. In the routing, a cloud engine re-reads only the pages local engines read poorly.</p></div>`,
+    tier3_ai: `<div class="card pad" style="margin-bottom:14px"><b>Template-free extraction</b><p class="small muted" style="margin:6px 0 0">The model receives OCR text (and optionally page images) plus the field list from a <a href="#/types">Document type</a>, and must cite the OCR lines for every value. Values not found in the text are flagged for review. <b>Claude</b> also gets the page images and must answer in a JSON shape built from the document type. Use the <b>self-hosted</b> model for on-prem customers; Claude and the cloud API need cloud opt-in.</p></div>`
   }[pid];
   el.innerHTML = `
   <div class="head"><div class="grow"><div class="row"><span class="pill ${PACK[pid].cls}">${esc(pk.title.split(" · ")[0])}</span><h1>${esc(pk.title.split(" · ")[1])}</h1></div><p>${esc(pk.summary)}</p></div>
@@ -402,6 +514,7 @@ function engineCard(p, deny){
       <div>Runs</div><div>${p.runsLocally?"On this machine (no data leaves)":"Remote service"+(p.regions&&p.regions.length?` · ${esc(p.regions.join(", "))}`:"")}</div>
       <div>Languages</div><div>${p.languages.includes("*")?"Many (vendor list)":esc(p.languages.join(", "))}</div>
       <div>Credits / page</div><div>${Object.values(p.creditCostPerPage).some(v=>v>0)?esc(Object.entries(p.creditCostPerPage).filter(([,v])=>v>0).map(([k,v])=>`${CAP_LABEL[k]||k} ${v}`).join(" · ")):"Free"}</div>
+      ${priceText(p)?`<div>List price</div><div>${priceText(p)}</div>`:""}
     </div>
     ${s.cls!=="ok" && s.why ? `<div class="reason">${esc(s.why)}</div>`:""}
     ${cfg.install?`<div class="reason">Install: <code>${esc(cfg.install)}</code> <button class="btn sm ghost" data-copy="${esc(cfg.install)}">Copy</button> then restart the service.</div>`:""}

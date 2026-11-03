@@ -28,6 +28,9 @@ class PolicyEngine:
         res = config.get("residency", {})
         self.allowed_regions = _as_list(res.get("allowed_regions"))
         self.allow_cross_border = bool(res.get("allow_cross_border", False))
+        # client consent for outbound engines; the shipped config starts local-only (OCR strategy plan)
+        opt_in = (config.get("routing") or {}).get("cloud_opt_in", True)
+        self.cloud_opt_in = opt_in if isinstance(opt_in, bool) else str(opt_in).strip().lower() in ("true", "1", "yes")
 
     def check(self, info: ProviderInfo) -> tuple[bool, str]:
         if any(fnmatch(info.id, d) for d in self.deny):
@@ -38,6 +41,8 @@ class PolicyEngine:
             return True, "local engine"
         if self.profile == "onprem_airgapped":
             return False, "profile onprem_airgapped forbids outbound engines"
+        if not self.cloud_opt_in:
+            return False, "cloud opt-in is off: documents stay on this machine"
         if self.allowed_regions and not self.allow_cross_border:
             if not info.regions or not any(r in self.allowed_regions for r in info.regions):
                 return False, (f"'{info.id}' regions {info.regions or ['unknown']} not in allowed "

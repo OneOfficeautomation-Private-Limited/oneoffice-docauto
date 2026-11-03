@@ -1,0 +1,19 @@
+{
+  "id": "claude",
+  "displayName": "Claude (Anthropic)",
+  "version": "1.0.0",
+  "vendor": "Anthropic",
+  "tier": 3,
+  "kind": "extraction",
+  "entrypoint": "ClaudeExtractionProvider",
+  "capabilities": ["extract_schema", "classify"],
+  "languages": ["*"],
+  "runsLocally": false,
+  "regions": [],
+  "creditCostPerPage": {"extract_schema": 20, "classify": 2},
+  "credentialTypes": ["api_key"],
+  "license": "Commercial (BYOK or resold)",
+  "requires": {"python": ["anthropic"]},
+  "configSchema": {"model": "claude-opus-5-5 | claude-sonnet-5-5 | claude-haiku-5-5", "effort": "low | medium | high", "sendImages": true, "maxImages": 5, "region": "processing region for residency policy", "fallbacks": "default (refusal fallbacks) or empty to disable"},
+  "notes": "Official Anthropic SDK. Replies are constrained to a JSON schema built from the document type, and every value must cite OCR lines (hallucination guard shared with llm-cloud)."
+}

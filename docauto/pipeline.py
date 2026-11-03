@@ -1,6 +1,7 @@
 """DocumentService: the orchestrator the RPA tool talks to (in-process or over REST)."""
 from __future__ import annotations
 
+import io
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,7 @@ from .errors import DocAutoError, InvalidInput, UnsupportedCapability
 from .extraction import RULES_INFO, RulesExtractor
 from .models import DocumentResult, FieldSchema, ProvenanceStep, ReviewStatus, Source
 from .normalize import detect_direction, detect_language
-from .policy import PolicyEngine
+from .policy import PolicyEngine, _as_list
 from .preprocess import ingest
 from .provider import Capability, ExtractRequest, RecognizeRequest
 from .registry import ProviderRegistry, RegisteredProvider
@@ -24,6 +25,11 @@ from .scoring import score
 from .store import Store
 
 log = logging.getLogger("docauto.pipeline")
+
+
+def _page_confidence(page) -> Optional[float]:
+    vals = [l.confidence for l in page.lines if l.confidence is not None]
+    return sum(vals) / len(vals) if vals else None
 
 
 def _same(a: Any, b: Any) -> bool:
@@ -247,20 +253,9 @@ class DocumentService:
         else:
             result, used = self._digitize(job_id, doc_id, cands, req, opt, caps)
 
-        # low-confidence escalation (cheap engine first, premium if needed)
-        esc = self.config.get("fallback", {}).get("low_confidence", {}) or {}
-        conf = result.mean_line_confidence()
-        if (parent is None and opt.ocrProvider == "auto" and esc.get("escalate_to") and conf is not None
-                and conf < float(esc.get("threshold", 0)) and esc["escalate_to"] != used):
-            target = self.registry.get(esc["escalate_to"])
-            if target and target.available and self.policy.allows(target.info):
-                log.info("escalating %s -> %s (conf %.2f)", used, target.info.id, conf)
-                try:
-                    r2, used2 = self._digitize(job_id, doc_id, [target], req, opt, caps, fallback_from=used)
-                    if (r2.mean_line_confidence() or 0) >= conf:
-                        result, used = r2, used2
-                except DocAutoError as e:
-                    result.warnings.append(f"escalation to {target.info.id} failed: {e.code}")
+        # weak pages: re-read by the next engines in the retry chain (local first, cloud only with opt-in)
+        if parent is None and opt.ocrProvider == "auto" and used != "pdf-text":
+            self._retry_weak_pages(job_id, doc_id, result, used, ing.images, opt, caps)
 
         result.documentId = doc_id
         result.source = Source(fileName=file_name, mimeType=ing.mime_type, sha256=ing.sha256,
@@ -306,6 +301,64 @@ class DocumentService:
             result.warnings = [w for w in result.warnings if not w.startswith("document confidence")]
         self.store.save_result(result, schema.id if schema else None)
         return result
+
+    def retry_chain(self, used: str = "", languages: Optional[list[str]] = None) -> list[dict]:
+        """Engines that re-read pages below the confidence threshold, in order, with why each one would or
+        would not run. Local engines (retry_local) come first; the cloud engine (escalate_to) last."""
+        lc = self.config.get("fallback", {}).get("low_confidence", {}) or {}
+        ids = _as_list(lc.get("retry_local")) + _as_list(lc.get("escalate_to"))
+        out = []
+        for pid in dict.fromkeys(ids):
+            p = self.registry.get(pid)
+            if p is None:
+                out.append({"id": pid, "provider": None, "runs": False, "reason": "unknown engine"})
+                continue
+            ok, why = self.policy.check(p.info)
+            if pid == used:
+                reason = "already the main engine"
+            elif not ok:
+                reason = why
+            elif not p.available:
+                reason = p.reason or "not available"
+            elif languages and not p.info.supports_languages(languages):
+                reason = "language not supported"
+            else:
+                reason = ""
+            out.append({"id": pid, "provider": p, "runs": not reason, "reason": reason})
+        return out
+
+    def _retry_weak_pages(self, job_id, doc_id, result: DocumentResult, used: str, images, opt: ProcessOptions,
+                          caps) -> None:
+        threshold = float((self.config.get("fallback", {}).get("low_confidence", {}) or {}).get("threshold") or 0)
+        if not threshold:
+            return
+        for step in self.retry_chain(used, opt.languages):
+            weak = [i for i, pg in enumerate(result.pages) if (c := _page_confidence(pg)) is not None and c < threshold]
+            if not weak:
+                return
+            if not step["runs"]:
+                continue
+            p, improved = step["provider"], 0
+            t = time.time()
+            for i in weak:
+                buf = io.BytesIO()
+                images[i].save(buf, format="PNG")
+                req = RecognizeRequest(document_id=doc_id, pages=[images[i]], languages=opt.languages,
+                                       capabilities=caps, source_bytes=buf.getvalue(), mime_type="image/png")
+                try:
+                    r2, _ = self.router.run([p], lambda e: e.instance.recognize(req))
+                except DocAutoError as e:
+                    result.warnings.append(f"retry with {p.info.id} failed: {e.code}")
+                    break
+                if r2.pages and (_page_confidence(r2.pages[0]) or 0) > (_page_confidence(result.pages[i]) or 0):
+                    r2.pages[0].pageNumber = result.pages[i].pageNumber
+                    result.pages[i] = r2.pages[0]
+                    improved += 1
+            log.info("retried %d weak page(s) with %s, %d improved", len(weak), p.info.id, improved)
+            self._meter(job_id, doc_id, opt, p, caps[0], len(weak), "digitize", result, used,
+                        int((time.time() - t) * 1000))
+            if improved:
+                result.rebuild_text()
 
     def _digitize(self, job_id, doc_id, cands, req, opt, caps, fallback_from=None):
         t = time.time()

@@ -293,6 +293,22 @@ def put_settings(body: SettingsUpdate, _: str = Depends(auth)):
     return {"changed": changed, "profile": svc.policy.profile, "providers": svc.providers()}
 
 
+@app.get(f"{API}/costs")
+def costs(pages: int = 10000, cloudShare: float = 0.2, extractShare: float = 0.3, cloudOcr: str = "azure-di",
+          extraction: str = "azure-di", model: Optional[str] = None, optIn: Optional[bool] = None,
+          _: str = Depends(auth)):
+    """List price per 1,000 pages for every engine, and a monthly estimate (defaults: the plan's example).
+    optIn=true projects the cost as if the client had opted in (the UI shows that next to today's $0)."""
+    from .. import costs as costs_mod
+    svc = service()
+    configured = costs_mod.claude_model(svc.config)
+    opted_in = svc.policy.cloud_opt_in if optIn is None else optIn
+    return {"prices": costs_mod.price_table(svc.config, [p.info.id for p in svc.registry.providers.values()]),
+            "claudeModel": configured, "cloudOptIn": svc.policy.cloud_opt_in,
+            "estimate": costs_mod.estimate(pages, cloudShare, extractShare, cloudOcr or None, extraction,
+                                           model or configured, opted_in)}
+
+
 @app.get(f"{API}/admin/version")
 def get_version():
     from .. import updates

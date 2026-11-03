@@ -51,6 +51,14 @@ providers:
         region: ${LLM_REGION:-}
       credentials:
         apiKey: ${LLM_API_KEY:-}
+    claude:
+      config:
+        model: ${CLAUDE_MODEL:-claude-opus-5-5}   # claude-opus-5-5 | claude-sonnet-5-5 | claude-haiku-5-5
+        effort: ${CLAUDE_EFFORT:-medium}          # low | medium | high
+        sendImages: ${CLAUDE_SEND_IMAGES:-true}
+        region: ${CLAUDE_REGION:-}
+      credentials:
+        apiKey: ${CLAUDE_API_KEY:-}
     llm-local:
       config:
         baseUrl: ${LOCAL_LLM_BASE_URL:-}
@@ -60,13 +68,17 @@ providers:
 defaults:
   screen_ocr: ${DOCAUTO_DEFAULT_SCREEN_OCR:-tesseract}
   document_ocr: ${DOCAUTO_DEFAULT_OCR:-tesseract}      # tesseract | paddleocr | azure-di | google-docai | aws-textract
-  extraction: ${DOCAUTO_DEFAULT_EXTRACTION:-builtin-rules}   # builtin-rules | llm-local | llm-cloud
+  extraction: ${DOCAUTO_DEFAULT_EXTRACTION:-builtin-rules}   # builtin-rules | claude | llm-local | llm-cloud
+
+routing:
+  cloud_opt_in: ${DOCAUTO_CLOUD_OPT_IN:-false}   # false = local-only: no engine that sends data off this machine runs
 
 fallback:
   on_error: [tesseract]                  # engines tried last if the chosen one fails
-  low_confidence:
-    threshold: ${DOCAUTO_ESCALATE_THRESHOLD:-0.70}   # mean OCR line confidence below this...
-    escalate_to: ${DOCAUTO_ESCALATE_TO:-}                    # ...re-run with this engine (e.g. azure-di). Opt-in: costs credits
+  low_confidence:                        # per page, local first (OCR strategy plan)
+    threshold: ${DOCAUTO_ESCALATE_THRESHOLD:-0.85}   # a page whose mean OCR line confidence is below this...
+    retry_local: ${DOCAUTO_RETRY_LOCAL:-paddleocr}   # ...is re-read by these local engines in order (free)...
+    escalate_to: ${DOCAUTO_ESCALATE_TO:-}            # ...then by this cloud engine if still weak (needs cloud opt-in; costs credits)
 
 human_review:
   field_confidence_threshold: ${DOCAUTO_FIELD_THRESHOLD:-0.85}

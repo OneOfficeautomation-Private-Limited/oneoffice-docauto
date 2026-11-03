@@ -155,9 +155,13 @@ def _score_doc(svc, ts: TestSet, doc: TestDoc, result: DocumentResult, seconds: 
         vals = [l.confidence for l in pg.lines if l.confidence is not None]
         page_confs.append(sum(vals) / len(vals) if vals else None)
     engines = [s.providerId for s in result.provenance.steps if s.stage == "digitize"]
-    outbound = any((p := svc.registry.get(s.providerId)) is not None and not p.info.runsLocally
-                   for s in result.provenance.steps)
     pages = len(result.pages)
+    # pages sent to an outbound engine: per-page retries count their own pages; extraction sends the document
+    cloud = 0
+    for s in result.provenance.steps:
+        p = svc.registry.get(s.providerId)
+        if p is not None and not p.info.runsLocally:
+            cloud = max(cloud, s.pages if s.stage == "digitize" else pages)
     all_ok = all(f["ok"] for f in fields.values())
     review = bool(result.review.required)
     return {
@@ -168,7 +172,7 @@ def _score_doc(svc, ts: TestSet, doc: TestDoc, result: DocumentResult, seconds: 
         "fields": fields, "review_required": review,
         "review_reasons": [w for w in result.warnings if "review" in w or "failed" in w or "confidence" in w],
         "straight_through": all_ok and not review, "silent_error": not review and not all_ok,
-        "cloud_pages": pages if outbound else 0,
+        "cloud_pages": min(cloud, pages),
         "credits": round(sum(s.credits for s in result.provenance.steps), 4),
     }
 
