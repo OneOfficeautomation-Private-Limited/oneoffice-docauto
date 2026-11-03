@@ -60,6 +60,18 @@ curl localhost:8085/api/docs/v1/providers        # engines, option packs, policy
 curl localhost:8085/api/docs/v1/usage            # pages / credits per engine
 ```
 
+## Measure accuracy (benchmark)
+
+Runs a labelled test set through one or more engines and scores it against the targets in the OCR strategy plan: character accuracy, field accuracy, straight-through rate, cloud share and turnaround, plus documents auto-approved with a wrong field. Results are broken down by document type (clean, scan, fax, photo, pdf) and by field.
+
+```bash
+python samples/make_benchmark_set.py                 # 10 synthetic invoices x 5 variants -> benchmark-data/synthetic
+python -m docauto.benchmark benchmark-data/synthetic --engines tesseract,auto
+python -m docauto.benchmark benchmark-data/synthetic --engines tesseract,azure-di --targets cloud
+```
+
+The report (`report.md` + `results.json`) goes to `benchmark-data/reports/`. To test real documents, put each file next to a `<name>.truth.json` with the correct values (see `docauto/benchmark.py`) in a folder under `benchmark-data/`, which Git ignores: the repository is public, so client documents must never be committed.
+
 ## Enable Option 2 / Option 3
 
 Set the environment variables referenced in `config/document-service.yaml` and restart:
@@ -96,7 +108,7 @@ clients/java/       Java client for the host RPA tool
 integration/        designer action package manifest
 config/             service config + deployment profiles
 samples/            synthetic test documents + example field schema
-tests/              54 tests (contract, policy/router, extraction, AI option, DocFlow, updates, end-to-end API)
+tests/              62 tests (contract, policy/router, extraction, AI option, DocFlow, updates, benchmark, end-to-end API)
 windows/            install, start, update (get-docflow.ps1), shortcuts, installer .bat
 .github/workflows/  CI (Linux tests + real Windows install) and Release
 ```

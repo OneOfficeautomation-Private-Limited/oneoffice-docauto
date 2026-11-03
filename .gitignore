@@ -3,6 +3,8 @@
 data/
 tessdata/
 backups/
+# benchmark test sets and reports: real client documents must never reach the (public) repository
+benchmark-data/
 config/local.env
 .docflow-version
 *.db
