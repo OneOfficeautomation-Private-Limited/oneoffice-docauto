@@ -148,6 +148,7 @@ class Flow(BaseModel):
     id: str = ""
     name: str
     description: str = ""
+    folder: str = ""                                    # where it sits in the platform, e.g. "Finance / Accounts payable"
     docTypes: list[str] = Field(default_factory=list)   # Smart Inbox: empty = all doc types
     classify: ClassifySettings = Field(default_factory=ClassifySettings)
     engine: EngineChoice = Field(default_factory=EngineChoice)

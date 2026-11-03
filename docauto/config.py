@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Optional
 
 import yaml
 
@@ -23,9 +23,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
-def _subst(value: Any) -> Any:
+def _subst(value: Any, env: Mapping[str, str]) -> Any:
     if isinstance(value, str):
-        out = _ENV.sub(lambda m: os.environ.get(m.group(1)) or (m.group(2) or ""), value)
+        out = _ENV.sub(lambda m: env.get(m.group(1)) or (m.group(2) or ""), value)
         if out != value:  # typed values coming from environment variables
             low = out.strip().lower()
             if low in ("true", "yes", "on"):
@@ -36,9 +36,9 @@ def _subst(value: Any) -> Any:
                 return None
         return out
     if isinstance(value, dict):
-        return {k: _subst(v) for k, v in value.items()}
+        return {k: _subst(v, env) for k, v in value.items()}
     if isinstance(value, list):
-        return [_subst(v) for v in value]
+        return [_subst(v, env) for v in value]
     return value
 
 
@@ -52,13 +52,14 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
-def load_config(path: str | Path | None = None) -> dict[str, Any]:
+def load_config(path: str | Path | None = None, env: Optional[Mapping[str, str]] = None) -> dict[str, Any]:
+    """env: the variables to substitute (default: the process environment; a tenant adds its own settings)."""
     path = path or os.environ.get("DOCAUTO_CONFIG")
     cfg = DEFAULT_CONFIG
     if path and Path(path).exists():
         with open(path, encoding="utf-8") as f:
             cfg = _merge(DEFAULT_CONFIG, yaml.safe_load(f) or {})
-    cfg = _subst(cfg)
+    cfg = _subst(cfg, os.environ if env is None else env)
     if not cfg.get("options_dir"):
         cfg["options_dir"] = str(Path(__file__).resolve().parent.parent / "options")
     return cfg

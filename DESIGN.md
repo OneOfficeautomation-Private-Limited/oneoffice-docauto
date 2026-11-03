@@ -181,9 +181,13 @@ An explicit request for a forbidden engine returns `403 POLICY_DENIED`. Data nev
 ### 5.3 Plug-in checklist for the main tool team
 
 1. Deploy the container (`docker compose up`) next to the control room, or install on a Windows server for on-prem robots.
-2. Point the host's settings `docauto.baseUrl` / `docauto.apiToken` at it.
+2. Set a service token in DocFlow (`DOCAUTO_API_TOKEN`) and the same token in the host. The OOA Command Center keeps it in
+   its vault (Settings > Document Automation: `docflow_url`, `docflow_token_ref`; in SaaS the region's `OOA_DOCFLOW_URL` /
+   `OOA_DOCFLOW_TOKEN`) and forwards `/api/docflow/*` here with `X-OOA-Tenant` and `X-OOA-User`.
 3. Load `integration/action-package.json` into the action/package registry; implement the generic "REST-backed action" runner once.
-4. Replace `auth()` in `api/app.py` with platform token validation; map tenants.
+4. Tenants (`docauto/tenants.py`): each `X-OOA-Tenant` gets its own database and files under `<data_dir>/tenants/<tenant>` and
+   its own routing settings (cloud opt-in, retry chain, thresholds); engine keys and the profile stay server-wide. Without
+   the header a request belongs to `default`, the single-client install that keeps the base data folder.
 5. Hook "Send to validation" into the host's human-task inbox (deep link `/validation?doc=<id>`).
 6. Map `config/document-service.yaml` into the admin console (profile, option packs, engine keys, thresholds).
 7. Optionally swap `store.py` (SQLite) for the platform database.

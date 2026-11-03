@@ -4,10 +4,12 @@ Run:  uvicorn docauto.api.app:app --host 0.0.0.0 --port 8085
 """
 from __future__ import annotations
 
+import hmac
 import io
 import json
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +17,8 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, 
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
+from .. import tenants
+from ..config import load_config
 from ..errors import DocAutoError, InvalidInput, PolicyDenied, ProviderUnavailable, UnsupportedCapability
 from ..models import FieldSchema
 from ..pipeline import DocumentService, ProcessOptions
@@ -24,28 +28,63 @@ API = "/api/docs/v1"
 
 app = FastAPI(title="Oneoffice Document Automation", version="1.0.0",
               description="Pluggable OCR + IDP component: open-source, licensed/cloud and AI engine options.")
-_service: Optional[DocumentService] = None
+app.add_middleware(tenants.TenantMiddleware)
+_services: dict[str, DocumentService] = {}   # one per tenant, each with its own data folder and routing
+_services_lock = threading.RLock()
 
 
 def service() -> DocumentService:
-    global _service
-    if _service is None:
-        _service = DocumentService(config_path=os.environ.get("DOCAUTO_CONFIG"))
-    return _service
+    """The DocumentService of the request's tenant (see docauto.tenants)."""
+    return _service_for(tenants.current.get())
+
+
+def _service_for(tenant: str) -> DocumentService:
+    svc = _services.get(tenant)
+    if svc is None:
+        with _services_lock:
+            svc = _services.get(tenant)
+            if svc is None:
+                svc = _services[tenant] = _build_service(tenant)
+    return svc
+
+
+def _tenant_config(tenant: str, data_dir: str, options_dir: Optional[str]) -> dict:
+    env = {**os.environ, **tenants.read_overrides(_base_data_dir(), tenant)}
+    cfg = load_config(os.environ.get("DOCAUTO_CONFIG"), env=env)
+    cfg["storage"]["data_dir"] = data_dir
+    if options_dir:
+        cfg["options_dir"] = options_dir
+    return cfg
+
+
+def _build_service(tenant: str) -> DocumentService:
+    if tenant == tenants.DEFAULT:
+        return DocumentService(config_path=os.environ.get("DOCAUTO_CONFIG"))
+    base = _service_for(tenants.DEFAULT).config
+    return DocumentService(_tenant_config(tenant, str(tenants.data_dir(base["storage"]["data_dir"], tenant)),
+                                          base.get("options_dir")))
+
+
+def _base_data_dir() -> str:
+    return _service_for(tenants.DEFAULT).config["storage"]["data_dir"]
 
 
 def set_service(svc: DocumentService) -> None:
-    """Used by tests and by hosts embedding the component in-process."""
-    global _service
-    _service = svc
+    """Used by tests and by hosts embedding the component in-process: becomes the default tenant's service
+    (other tenants' data then lives under its data folder)."""
+    with _services_lock:
+        for t in list(_services):
+            _drop(t)
+        _services[tenants.DEFAULT] = svc
 
 
 def auth(authorization: Optional[str] = Header(default=None)) -> str:
-    """Placeholder: replace with the host RPA platform's token validation."""
+    """The service token (DOCAUTO_API_TOKEN) the Command Center sends; returns the request's tenant.
+    Without a token configured the API is open (local testing only)."""
     token = os.environ.get("DOCAUTO_API_TOKEN")
-    if token and authorization != f"Bearer {token}":
+    if token and not hmac.compare_digest(authorization or "", f"Bearer {token}"):
         raise HTTPException(401, "invalid token")
-    return "default"
+    return tenants.current.get()
 
 
 @app.exception_handler(DocAutoError)
@@ -256,24 +295,34 @@ def usage(groupBy: str = "provider_id", _: str = Depends(auth)):
 from fastapi.responses import RedirectResponse  # noqa: E402
 
 from .. import settings as settings_mod  # noqa: E402
-from ..config import load_config  # noqa: E402
 
 
 def reload_service() -> DocumentService:
-    """Rebuild the service from YAML + environment after settings change (keeps the same data folder)."""
+    """Rebuild the request tenant's service after its settings change (keeps the same data folder). Server-wide
+    settings (the default tenant's) reach every tenant, so the other tenants are rebuilt too."""
+    tenant = tenants.current.get()
     old = service()
-    cfg = load_config(os.environ.get("DOCAUTO_CONFIG"))
-    cfg["storage"]["data_dir"] = old.config["storage"]["data_dir"]
-    if old.config.get("options_dir"):
-        cfg["options_dir"] = old.config["options_dir"]
-    new = DocumentService(cfg)
-    set_service(new)
+    cfg = _tenant_config(tenant, old.config["storage"]["data_dir"], old.config.get("options_dir"))
+    with _services_lock:
+        if tenant == tenants.DEFAULT:
+            for t in [t for t in _services if t != tenants.DEFAULT]:
+                _drop(t)
+        _drop(tenant)
+        _services[tenant] = new = DocumentService(cfg)
+    _start_docflow()
     return new
 
 
 @app.get(f"{API}/admin/settings")
-def get_settings(_: str = Depends(auth)):
-    return settings_mod.describe()
+def get_settings(tenant: str = Depends(auth)):
+    out = settings_mod.describe()
+    if tenant != tenants.DEFAULT:  # the tenant's own routing over the server's; keys and profile are server-wide
+        own = tenants.read_overrides(_base_data_dir(), tenant)
+        out["defaults"] = [{**f, "value": own.get(f["key"], f["value"]), "tenant": f["key"] in own}
+                           for f in out["defaults"]]
+        out["tenant"] = tenant
+        out.pop("envFile", None)
+    return out
 
 
 class SettingsUpdate(BaseModel):
@@ -281,9 +330,10 @@ class SettingsUpdate(BaseModel):
 
 
 @app.put(f"{API}/admin/settings")
-def put_settings(body: SettingsUpdate, _: str = Depends(auth)):
+def put_settings(body: SettingsUpdate, tenant: str = Depends(auth)):
     try:
-        changed = settings_mod.apply(body.values)
+        changed = (settings_mod.apply(body.values) if tenant == tenants.DEFAULT
+                   else tenants.write_overrides(_base_data_dir(), tenant, body.values))
     except ValueError as e:
         raise HTTPException(400, str(e))
     try:
@@ -430,30 +480,48 @@ from contextlib import contextmanager  # noqa: E402
 from ..docflow import INBOX_ID, DocFlowService, DocType, Flow, library, parse_table_file  # noqa: E402
 
 DF = f"{API}/df"
-_df: Optional[DocFlowService] = None
+_dfs: dict[str, DocFlowService] = {}
 
 
 def docflow() -> DocFlowService:
-    """DocFlow service bound to the current DocumentService (rebuilt after settings reloads)."""
-    global _df
-    svc = service()
-    if _df is None or _df.svc is not svc:
-        if _df is not None:
-            _df.stop_watcher()
-        _df = DocFlowService(svc)
-        try:
-            _df.migrate_instances()
-        except Exception:  # pragma: no cover - migration is best effort
-            import logging
-            logging.getLogger("docauto").exception("instance migration failed")
-        if os.environ.get("DOCAUTO_FOLDER_WATCHER", "true").lower() != "false":
-            _df.start_watcher()
-    return _df
+    """The request tenant's DocFlow, bound to its DocumentService (rebuilt after settings reloads)."""
+    tenant = tenants.current.get()
+    svc = _service_for(tenant)
+    df = _dfs.get(tenant)
+    if df is None or df.svc is not svc:
+        with _services_lock:
+            df = _dfs.get(tenant)
+            if df is None or df.svc is not svc:
+                if df is not None:
+                    df.stop_watcher()
+                df = _dfs[tenant] = DocFlowService(svc)
+                try:
+                    df.migrate_instances()
+                except Exception:  # pragma: no cover - migration is best effort
+                    import logging
+                    logging.getLogger("docauto").exception("instance migration failed")
+                if os.environ.get("DOCAUTO_FOLDER_WATCHER", "true").lower() != "false":
+                    df.start_watcher()
+    return df
+
+
+def _drop(tenant: str) -> None:
+    """Forget a tenant's services (caller holds the lock); its DocFlow folder watcher stops."""
+    _services.pop(tenant, None)
+    df = _dfs.pop(tenant, None)
+    if df is not None:
+        df.stop_watcher()
 
 
 @app.on_event("startup")
 def _start_docflow():
-    docflow()
+    """DocFlow, with its folder watcher, for every tenant that has data."""
+    for tenant in [tenants.DEFAULT, *tenants.known(_base_data_dir())]:
+        token = tenants.current.set(tenant)
+        try:
+            docflow()
+        finally:
+            tenants.current.reset(token)
 
 
 # ---- doc types
@@ -576,9 +644,20 @@ async def df_upload(flow_id: str, files: list[UploadFile] = File(...), wait: boo
 
 @app.get(f"{DF}/flows/{{flow_id}}/documents")
 def df_flow_documents(flow_id: str, status: Optional[str] = None, limit: int = 200, offset: int = 0,
-                      _: str = Depends(auth)):
+                      fields: bool = False, _: str = Depends(auth)):
+    """fields=true adds each document's extracted values, confidence, pages and engines (the platform's lists)."""
     sts = [s for s in (status or "").split(",") if s] or None
-    return service().store.instance_documents(flow_id if flow_id != "all" else None, sts, limit, offset)
+    rows = service().store.instance_documents(flow_id if flow_id != "all" else None, sts, limit, offset)
+    if fields:
+        store = service().store
+        for r in rows:
+            res = store.get_result(r["id"])
+            r["fields"] = {f.name: f.value for f in res.fields} if res else {}
+            r["confidence"] = res.confidence if res else None
+            r["pages"] = len(res.pages) if res else None
+            r["engines"] = list(dict.fromkeys(s.providerId for s in res.provenance.steps
+                                              if s.stage == "digitize")) if res else []
+    return rows
 
 
 @app.get(f"{DF}/flows/{{flow_id}}/export")
@@ -624,7 +703,8 @@ class _Review(BaseModel):
 def df_review(doc_id: str, body: _Review, _: str = Depends(auth)):
     if body.action not in ("submit", "invalid"):
         raise HTTPException(400, "action must be 'submit' or 'invalid'")
-    return docflow().review(doc_id, body.fields, body.reviewer, body.action)
+    reviewer = tenants.current_user.get() or body.reviewer  # the platform's signed-in user, when it sends one
+    return docflow().review(doc_id, body.fields, reviewer, body.action)
 
 
 class _Reclassify(BaseModel):
