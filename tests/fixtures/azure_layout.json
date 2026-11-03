@@ -1,0 +1,28 @@
+{
+  "content": "Invoice Number: INV-1\nTotal: 115.00\nItem Amount\nA 100.00",
+  "pages": [{
+    "pageNumber": 1, "width": 1000, "height": 2000, "unit": "pixel", "angle": 0.5,
+    "words": [
+      {"content": "Invoice", "polygon": [100,100,200,100,200,130,100,130], "confidence": 0.99, "span": {"offset": 0, "length": 7}},
+      {"content": "Number:", "polygon": [210,100,320,100,320,130,210,130], "confidence": 0.98, "span": {"offset": 8, "length": 7}},
+      {"content": "INV-1", "polygon": [330,100,420,100,420,130,330,130], "confidence": 0.90, "span": {"offset": 16, "length": 5}},
+      {"content": "Total:", "polygon": [100,200,180,200,180,230,100,230], "confidence": 0.97, "span": {"offset": 22, "length": 6}},
+      {"content": "115.00", "polygon": [190,200,280,200,280,230,190,230], "confidence": 0.95, "span": {"offset": 29, "length": 6}}
+    ],
+    "lines": [
+      {"content": "Invoice Number: INV-1", "polygon": [100,100,420,100,420,130,100,130], "spans": [{"offset": 0, "length": 21}]},
+      {"content": "Total: 115.00", "polygon": [100,200,280,200,280,230,100,230], "spans": [{"offset": 22, "length": 13}]}
+    ]
+  }],
+  "paragraphs": [{"role": "title", "content": "Invoice Number: INV-1", "boundingRegions": [{"pageNumber": 1, "polygon": [100,100,420,100,420,130,100,130]}]}],
+  "tables": [{"rowCount": 2, "columnCount": 2, "boundingRegions": [{"pageNumber": 1, "polygon": [100,300,500,300,500,400,100,400]}],
+    "cells": [
+      {"kind": "columnHeader", "rowIndex": 0, "columnIndex": 0, "content": "Item"},
+      {"kind": "columnHeader", "rowIndex": 0, "columnIndex": 1, "content": "Amount"},
+      {"rowIndex": 1, "columnIndex": 0, "content": "A"},
+      {"rowIndex": 1, "columnIndex": 1, "content": "100.00"}
+    ]}],
+  "keyValuePairs": [{"key": {"content": "Total:", "boundingRegions": [{"pageNumber": 1, "polygon": [100,200,180,200,180,230,100,230]}]},
+                     "value": {"content": "115.00", "boundingRegions": [{"pageNumber": 1, "polygon": [190,200,280,200,280,230,190,230]}]},
+                     "confidence": 0.93}]
+}

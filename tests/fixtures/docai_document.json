@@ -1,0 +1,18 @@
+{
+  "text": "Total: 115.00\nItem Amount\nA 100.00\n",
+  "pages": [{
+    "pageNumber": 1, "dimension": {"width": 1000, "height": 2000},
+    "lines": [{"layout": {"textAnchor": {"textSegments": [{"endIndex": "14"}]}, "confidence": 0.97,
+               "boundingPoly": {"normalizedVertices": [{"x": 0.1, "y": 0.1}, {"x": 0.3, "y": 0.1}, {"x": 0.3, "y": 0.12}, {"x": 0.1, "y": 0.12}]}}}],
+    "tokens": [{"layout": {"textAnchor": {"textSegments": [{"endIndex": "6"}]}, "confidence": 0.99,
+               "boundingPoly": {"normalizedVertices": [{"x": 0.1, "y": 0.1}, {"x": 0.18, "y": 0.1}, {"x": 0.18, "y": 0.12}, {"x": 0.1, "y": 0.12}]}}}],
+    "tables": [{"layout": {}, "headerRows": [{"cells": [
+                  {"layout": {"textAnchor": {"textSegments": [{"startIndex": "14", "endIndex": "18"}]}}},
+                  {"layout": {"textAnchor": {"textSegments": [{"startIndex": "19", "endIndex": "25"}]}}}]}],
+                "bodyRows": [{"cells": [
+                  {"layout": {"textAnchor": {"textSegments": [{"startIndex": "26", "endIndex": "27"}]}}},
+                  {"layout": {"textAnchor": {"textSegments": [{"startIndex": "28", "endIndex": "34"}]}}}]}]}],
+    "formFields": [{"fieldName": {"textAnchor": {"textSegments": [{"endIndex": "6"}]}},
+                    "fieldValue": {"textAnchor": {"textSegments": [{"startIndex": "7", "endIndex": "13"}]}, "confidence": 0.9}}]
+  }]
+}

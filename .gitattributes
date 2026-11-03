@@ -1,2 +1,10 @@
-# Auto detect text files and perform LF normalization
 * text=auto
+# Windows scripts keep CRLF exactly as committed (cmd.exe misreads LF-only .bat files)
+*.bat -text
+*.cmd -text
+*.ps1 -text
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.traineddata binary

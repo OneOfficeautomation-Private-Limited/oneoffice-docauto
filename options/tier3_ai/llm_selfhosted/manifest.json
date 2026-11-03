@@ -1,0 +1,18 @@
+{
+  "id": "llm-local",
+  "displayName": "AI extraction - self-hosted model (on-prem)",
+  "version": "1.0.0",
+  "vendor": "Self-hosted (vLLM / Ollama / any OpenAI-compatible server)",
+  "tier": 3,
+  "kind": "extraction",
+  "entrypoint": "LlmExtractionProvider",
+  "module": "../llm_openai_compatible/provider.py",
+  "capabilities": ["extract_schema", "classify"],
+  "languages": ["*"],
+  "runsLocally": true,
+  "regions": [],
+  "creditCostPerPage": {"extract_schema": 0, "classify": 0},
+  "credentialTypes": ["api_key_optional"],
+  "license": "Depends on chosen model weights - verify commercial use is allowed",
+  "configSchema": {"baseUrl": "http://gpu-server:8000/v1", "model": "local model id", "sendImages": false}
+}

@@ -1,0 +1,19 @@
+{
+  "id": "paddleocr",
+  "displayName": "PaddleOCR (open source)",
+  "version": "1.0.0",
+  "vendor": "PaddlePaddle",
+  "tier": 1,
+  "kind": "ocr",
+  "entrypoint": "PaddleOcrProvider",
+  "capabilities": ["ocr_printed", "layout"],
+  "languages": ["en", "ar", "fr", "de", "zh", "es", "it", "pt", "ru", "hi", "ur", "fa"],
+  "runsLocally": true,
+  "regions": [],
+  "creditCostPerPage": {"ocr_printed": 0, "layout": 0},
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/tiff"],
+  "credentialTypes": [],
+  "license": "Apache-2.0",
+  "requires": {"python": ["paddleocr", "paddlepaddle"]},
+  "notes": "Optional heavy dependency. If not installed the registry marks it unavailable and the router skips it."
+}

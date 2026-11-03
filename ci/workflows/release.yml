@@ -1,0 +1,30 @@
+# Push a tag like v3.1.0 to publish a release. PCs set to DOCFLOW_REF=release only take tested releases.
+name: Release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr tesseract-ocr-ara
+      - run: pip install -r requirements.txt && python samples/make_samples.py && python -m pytest -q
+      - name: VERSION must match the tag
+        run: test "v$(cat VERSION)" = "${GITHUB_REF_NAME}" || (echo "VERSION file says $(cat VERSION), tag is ${GITHUB_REF_NAME}" && exit 1)
+      - name: Build zip and create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git archive --format=zip --prefix=oneoffice-docflow/ -o "oneoffice-docflow-${GITHUB_REF_NAME}.zip" HEAD
+          cp windows/Install-OneOffice-DocFlow.bat .
+          sed -i "s#set \"DOCFLOW_REPO=\"#set \"DOCFLOW_REPO=${GITHUB_REPOSITORY}\"#" Install-OneOffice-DocFlow.bat
+          gh release create "${GITHUB_REF_NAME}" --generate-notes --title "OneOffice DocFlow ${GITHUB_REF_NAME}" \
+            "oneoffice-docflow-${GITHUB_REF_NAME}.zip" Install-OneOffice-DocFlow.bat

@@ -1,0 +1,20 @@
+{
+  "id": "aws-textract",
+  "displayName": "Amazon Textract",
+  "version": "1.0.0",
+  "vendor": "Amazon Web Services",
+  "tier": 2,
+  "kind": "ocr",
+  "entrypoint": "TextractProvider",
+  "capabilities": ["ocr_printed", "ocr_handwriting", "tables", "key_value", "selection_marks"],
+  "languages": ["en", "es", "fr", "de", "it", "pt"],
+  "runsLocally": false,
+  "regions": [],
+  "creditCostPerPage": {"ocr_printed": 1, "ocr_handwriting": 1, "tables": 6, "key_value": 6},
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/tiff"],
+  "credentialTypes": ["aws_access_key", "aws_role"],
+  "license": "Commercial (BYOK or resold)",
+  "requires": {"python": ["boto3"]},
+  "configSchema": {"region": "AWS region, e.g. me-central-1 / eu-west-1"},
+  "notes": "Language list is conservative; verify current Textract language support (Arabic) before routing Arabic documents here."
+}

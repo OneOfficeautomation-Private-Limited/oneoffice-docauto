@@ -1,0 +1,19 @@
+{
+  "id": "abbyy",
+  "displayName": "ABBYY (Vantage / FineReader Engine / Cloud)",
+  "version": "0.1.0",
+  "vendor": "ABBYY",
+  "tier": 2,
+  "kind": "ocr",
+  "entrypoint": "AbbyyProvider",
+  "capabilities": ["ocr_printed", "ocr_handwriting", "layout", "tables"],
+  "languages": ["*"],
+  "runsLocally": false,
+  "regions": [],
+  "creditCostPerPage": {"ocr_printed": 2, "ocr_handwriting": 3, "layout": 4, "tables": 4},
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/tiff"],
+  "credentialTypes": ["api_key", "license_server"],
+  "license": "Commercial (resold under ABBYY partner/OEM agreement)",
+  "status": "template",
+  "notes": "Connector template. ABBYY offers several products (Vantage REST API, FineReader Engine SDK on-prem, Cloud OCR). Complete call_engine() for the product in your agreement; mapping helpers are ready."
+}

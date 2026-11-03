@@ -1,0 +1,13 @@
+# local to each PC - never commit
+.venv/
+data/
+tessdata/
+backups/
+config/local.env
+.docflow-version
+*.db
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+Thumbs.db

@@ -1,0 +1,18 @@
+{
+  "id": "tesseract",
+  "displayName": "Tesseract 5 (open source)",
+  "version": "1.0.0",
+  "vendor": "Tesseract OCR project",
+  "tier": 1,
+  "kind": "ocr",
+  "entrypoint": "TesseractProvider",
+  "capabilities": ["ocr_printed", "screen_ocr", "layout", "searchable_pdf"],
+  "languages": ["en", "ar", "fr", "de", "hi", "ur", "fa", "zh", "es", "it", "pt", "ru", "tr"],
+  "runsLocally": true,
+  "regions": [],
+  "creditCostPerPage": {"ocr_printed": 0, "screen_ocr": 0, "layout": 0, "searchable_pdf": 0},
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/tiff", "image/bmp", "image/webp"],
+  "credentialTypes": [],
+  "license": "Apache-2.0",
+  "requires": {"system": ["tesseract >= 5 with language packs (eng, ara, ...)"], "python": ["pytesseract"]}
+}

@@ -1,0 +1,15 @@
+{
+  "id": "supplier-invoice",
+  "name": "Supplier Invoice",
+  "description": "Saudi VAT tax invoice (English / Arabic)",
+  "documentLanguages": ["en", "ar"],
+  "fields": [
+    {"name": "invoice_number", "type": "string", "label": "Invoice Number / رقم الفاتورة", "required": true, "regex": "INV-\\d{4}-\\d+"},
+    {"name": "invoice_date", "type": "date", "label": "Invoice Date / تاريخ الفاتورة", "required": true, "format": "%d/%m/%Y"},
+    {"name": "supplier_vat", "type": "string", "label": "Supplier VAT No", "aliases": ["VAT Number", "الرقم الضريبي"], "regex": "3\\d{14}"},
+    {"name": "subtotal", "type": "currency", "label": "Subtotal", "required": true},
+    {"name": "vat_amount", "type": "currency", "label": "VAT 15%", "aliases": ["VAT"]},
+    {"name": "total", "type": "currency", "label": "Total", "required": true}
+  ],
+  "validation": ["abs(subtotal + vat_amount - total) < 0.05", "abs(round(subtotal * 0.15, 2) - vat_amount) < 0.05"]
+}

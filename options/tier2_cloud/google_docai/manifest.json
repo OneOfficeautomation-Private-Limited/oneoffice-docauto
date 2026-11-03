@@ -1,0 +1,19 @@
+{
+  "id": "google-docai",
+  "displayName": "Google Cloud Document AI",
+  "version": "1.0.0",
+  "vendor": "Google",
+  "tier": 2,
+  "kind": "ocr",
+  "entrypoint": "GoogleDocumentAiProvider",
+  "capabilities": ["ocr_printed", "ocr_handwriting", "layout", "tables", "key_value", "prebuilt_models"],
+  "languages": ["*"],
+  "runsLocally": false,
+  "regions": [],
+  "creditCostPerPage": {"ocr_printed": 1, "ocr_handwriting": 1, "layout": 5, "tables": 5, "key_value": 5, "prebuilt_models": 8},
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/tiff", "image/gif", "image/bmp", "image/webp"],
+  "credentialTypes": ["service_account_json"],
+  "license": "Commercial (BYOK or resold)",
+  "requires": {"python": ["google-cloud-documentai"]},
+  "configSchema": {"projectId": "gcp project", "location": "us | eu", "ocrProcessorId": "Document OCR processor id", "formProcessorId": "Form Parser processor id (tables/kv)"}
+}

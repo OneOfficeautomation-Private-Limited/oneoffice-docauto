@@ -1,0 +1,22 @@
+services:
+  docauto:
+    build: .
+    image: oneoffice/docauto:1.0.0
+    ports: ["8085:8085"]
+    environment:
+      DOCAUTO_CONFIG: /app/config/document-service.yaml
+      DOCAUTO_API_TOKEN: ${DOCAUTO_API_TOKEN:-}
+      # Option pack 2 / 3 credentials (leave empty to keep those engines disabled)
+      AZURE_DI_ENDPOINT: ${AZURE_DI_ENDPOINT:-}
+      AZURE_DI_KEY: ${AZURE_DI_KEY:-}
+      AZURE_DI_REGION: ${AZURE_DI_REGION:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-}
+    volumes:
+      - docauto-data:/app/data
+      - ./config:/app/config:ro
+volumes:
+  docauto-data:

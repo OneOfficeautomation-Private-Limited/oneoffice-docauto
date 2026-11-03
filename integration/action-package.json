@@ -1,0 +1,405 @@
+{
+  "$comment": "Designer action package 'DocFlow' for the Oneoffice RPA tool. Bots send documents to a live Doc Flow (or the Smart Inbox), wait for the result and use the extracted fields. Each action maps to one REST call.",
+  "package": {
+    "id": "oneoffice.docflow",
+    "name": "DocFlow",
+    "version": "3.0.0",
+    "category": "Documents",
+    "icon": "document-scan",
+    "serviceBaseUrlSetting": "docauto.baseUrl",
+    "authSetting": "docauto.apiToken",
+    "minServiceVersion": "1.0.0"
+  },
+  "sharedInputs": {
+    "provider": {
+      "type": "dropdown",
+      "label": "Engine",
+      "default": "auto",
+      "source": {
+        "endpoint": "GET /api/docs/v1/providers",
+        "items": "$.providers[?(@.available && @.allowedByPolicy)]",
+        "value": "id",
+        "label": "displayName",
+        "group": "optionPack"
+      },
+      "staticItems": [
+        {
+          "value": "auto",
+          "label": "Auto (router decides)"
+        }
+      ]
+    },
+    "languages": {
+      "type": "multiselect",
+      "label": "Languages",
+      "default": [
+        "en"
+      ],
+      "items": [
+        "en",
+        "ar",
+        "fr",
+        "de",
+        "hi",
+        "ur",
+        "fa",
+        "zh",
+        "es"
+      ]
+    },
+    "flow": {
+      "type": "dropdown",
+      "label": "Doc Flow",
+      "required": true,
+      "source": {
+        "endpoint": "GET /api/docs/v1/df/flows",
+        "items": "$[?(@.status=='live')]",
+        "value": "id",
+        "label": "name"
+      },
+      "staticItems": [
+        {
+          "value": "smart-inbox",
+          "label": "Smart Inbox (recognise & split automatically)"
+        }
+      ]
+    }
+  },
+  "actions": [
+    {
+      "id": "sendToFlow",
+      "label": "Send document to flow",
+      "group": "DocFlow",
+      "request": {
+        "method": "POST",
+        "path": "/api/docs/v1/df/flows/${flow}/documents",
+        "query": {
+          "source": "bot",
+          "requireLive": "true"
+        },
+        "multipart": {
+          "files": "${filePath}"
+        }
+      },
+      "inputs": [
+        {
+          "name": "flow",
+          "ref": "flow"
+        },
+        {
+          "name": "filePath",
+          "type": "file",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "documentId",
+          "type": "string",
+          "path": "$.documents[0].documentId"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "path": "$.documents[0].status"
+        }
+      ]
+    },
+    {
+      "id": "waitForDocument",
+      "label": "Wait for document",
+      "group": "DocFlow",
+      "description": "Wait until processed (and optionally reviewed). For a split batch, returns the list of child documents.",
+      "request": {
+        "method": "GET",
+        "path": "/api/docs/v1/df/documents/${documentId}",
+        "pollUntil": "$.status in ['success','validated','invalid','failed','split'] or ($.status=='validation' and !${waitForReview})",
+        "pollIntervalSeconds": 2,
+        "timeoutSeconds": "${timeoutSeconds}"
+      },
+      "inputs": [
+        {
+          "name": "documentId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "waitForReview",
+          "type": "boolean",
+          "default": true
+        },
+        {
+          "name": "timeoutSeconds",
+          "type": "number",
+          "default": 3600
+        }
+      ],
+      "outputs": [
+        {
+          "name": "status",
+          "type": "string",
+          "path": "$.status"
+        },
+        {
+          "name": "docType",
+          "type": "string",
+          "path": "$.doctype_id"
+        },
+        {
+          "name": "fields",
+          "type": "dictionary",
+          "path": "$.fields"
+        },
+        {
+          "name": "flags",
+          "type": "list",
+          "path": "$.flags"
+        },
+        {
+          "name": "children",
+          "type": "list",
+          "path": "$.children"
+        }
+      ],
+      "errors": {
+        "failed": "Throw 'DocumentFailed' with $.error.message",
+        "invalid": "Throw 'DocumentRejected'"
+      }
+    },
+    {
+      "id": "getDocumentResult",
+      "label": "Get document result",
+      "group": "DocFlow",
+      "request": {
+        "method": "GET",
+        "path": "/api/docs/v1/df/documents/${documentId}"
+      },
+      "inputs": [
+        {
+          "name": "documentId",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "status",
+          "type": "string",
+          "path": "$.status"
+        },
+        {
+          "name": "fields",
+          "type": "dictionary",
+          "path": "$.fields"
+        },
+        {
+          "name": "confidence",
+          "type": "dictionary",
+          "path": "$.confidence"
+        },
+        {
+          "name": "flags",
+          "type": "list",
+          "path": "$.flags"
+        }
+      ]
+    },
+    {
+      "id": "exportFlowResults",
+      "label": "Export flow results",
+      "group": "DocFlow",
+      "request": {
+        "method": "GET",
+        "path": "/api/docs/v1/df/flows/${flow}/export",
+        "query": {
+          "format": "${format}"
+        },
+        "saveTo": "${outputPath}"
+      },
+      "inputs": [
+        {
+          "name": "flow",
+          "ref": "flow"
+        },
+        {
+          "name": "format",
+          "type": "dropdown",
+          "items": [
+            "xlsx",
+            "csv"
+          ],
+          "default": "xlsx"
+        },
+        {
+          "name": "outputPath",
+          "type": "file",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "value": "${outputPath}"
+        }
+      ]
+    },
+    {
+      "id": "screenOcr",
+      "label": "Screen OCR",
+      "description": "Read text from a screen region / window capture (Citrix, RDP, legacy apps). Synchronous.",
+      "request": {
+        "method": "POST",
+        "path": "/api/docs/v1/ocr/screen",
+        "multipart": {
+          "file": "${captureImage}",
+          "provider": "${provider}",
+          "languages": "${languages}"
+        }
+      },
+      "hostIntegration": "The host captures the region/window to PNG (capture area / capture window) and passes the bytes.",
+      "inputs": [
+        {
+          "name": "captureImage",
+          "type": "image",
+          "required": true
+        },
+        {
+          "name": "provider",
+          "ref": "provider",
+          "default": "auto"
+        },
+        {
+          "name": "languages",
+          "ref": "languages"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "string",
+          "path": "$.text"
+        },
+        {
+          "name": "lines",
+          "type": "list",
+          "path": "$.lines"
+        }
+      ],
+      "group": "OCR"
+    },
+    {
+      "id": "findTextOnScreen",
+      "label": "Find text on screen",
+      "description": "Screen OCR then locate a phrase; returns its center for click/hover actions.",
+      "request": {
+        "method": "POST",
+        "path": "/api/docs/v1/ocr/screen",
+        "multipart": {
+          "file": "${captureImage}",
+          "provider": "${provider}",
+          "languages": "${languages}"
+        }
+      },
+      "postProcess": "first line whose text contains ${searchText} (case-insensitive); center = (bbox.x + bbox.w/2) * captureWidth + captureLeft, same for y",
+      "inputs": [
+        {
+          "name": "captureImage",
+          "type": "image",
+          "required": true
+        },
+        {
+          "name": "searchText",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "provider",
+          "ref": "provider",
+          "default": "auto"
+        },
+        {
+          "name": "languages",
+          "ref": "languages"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "found",
+          "type": "boolean"
+        },
+        {
+          "name": "x",
+          "type": "number"
+        },
+        {
+          "name": "y",
+          "type": "number"
+        }
+      ],
+      "group": "OCR"
+    },
+    {
+      "id": "makeSearchablePdf",
+      "label": "Make searchable PDF",
+      "request": {
+        "method": "POST",
+        "path": "/api/docs/v1/pdf/searchable",
+        "multipart": {
+          "file": "${filePath}",
+          "languages": "${languages}"
+        },
+        "saveTo": "${outputPath}"
+      },
+      "inputs": [
+        {
+          "name": "filePath",
+          "type": "file",
+          "required": true
+        },
+        {
+          "name": "outputPath",
+          "type": "file",
+          "required": true
+        },
+        {
+          "name": "languages",
+          "ref": "languages"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filePath",
+          "type": "string",
+          "value": "${outputPath}"
+        }
+      ],
+      "group": "OCR"
+    }
+  ],
+  "triggers": [
+    {
+      "id": "flowFolder",
+      "label": "Watched folder (set in the flow's Intake stage)",
+      "hostOwned": false
+    },
+    {
+      "id": "docflowWebhook",
+      "label": "Document finished (flow delivery 'Start a bot')",
+      "hostOwned": true,
+      "note": "Configure a 'Start a bot' delivery in the flow; DocFlow POSTs {bot, input:{fields,...}} to your RPA tool's run endpoint."
+    }
+  ],
+  "adminSettings": [
+    {
+      "key": "docauto.baseUrl",
+      "label": "Document Service URL",
+      "default": "http://localhost:8085"
+    },
+    {
+      "key": "docauto.apiToken",
+      "label": "API token",
+      "secret": true
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": "azure-di",
+  "displayName": "Microsoft Azure AI Document Intelligence",
+  "version": "1.0.0",
+  "vendor": "Microsoft",
+  "tier": 2,
+  "kind": "ocr",
+  "entrypoint": "AzureDocumentIntelligenceProvider",
+  "capabilities": ["ocr_printed", "ocr_handwriting", "layout", "tables", "key_value", "selection_marks", "prebuilt_models"],
+  "languages": ["*"],
+  "runsLocally": false,
+  "regions": [],
+  "creditCostPerPage": {"ocr_printed": 1, "ocr_handwriting": 1, "layout": 5, "tables": 5, "key_value": 5, "prebuilt_models": 8},
+  "supportedMimeTypes": ["application/pdf", "image/png", "image/jpeg", "image/tiff", "image/bmp"],
+  "credentialTypes": ["endpoint+api_key"],
+  "license": "Commercial (BYOK or resold)",
+  "configSchema": {"endpoint": "https://<resource>.cognitiveservices.azure.com", "apiVersion": "2024-11-30", "region": "e.g. uaenorth / westeurope (used by residency policy)", "readModel": "prebuilt-read", "layoutModel": "prebuilt-layout"},
+  "notes": "Also available as on-prem containers (Read/Layout) for hybrid customers: point endpoint at the container and set runsLocally in config."
+}

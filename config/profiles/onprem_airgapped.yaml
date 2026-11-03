@@ -1,0 +1,9 @@
+# Government / banks: nothing leaves the network.
+deployment_profile: onprem_airgapped
+option_packs: {tier1_opensource: true, tier2_cloud: false, tier3_ai: true}   # tier3 = llm-local only (policy blocks llm-cloud)
+defaults: {screen_ocr: tesseract, document_ocr: tesseract, extraction: builtin-rules}
+providers:
+  settings:
+    llm-local:
+      config: {baseUrl: "${LOCAL_LLM_BASE_URL:-}", model: "${LOCAL_LLM_MODEL:-}"}
+storage: {data_dir: ./data}

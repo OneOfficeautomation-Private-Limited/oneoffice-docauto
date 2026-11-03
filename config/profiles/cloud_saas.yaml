@@ -1,0 +1,9 @@
+# SaaS tenant: all options available, Saudi/GCC residency preferred.
+deployment_profile: cloud_saas
+option_packs: {tier1_opensource: true, tier2_cloud: true, tier3_ai: true}
+residency: {allowed_regions: [], allow_cross_border: true}
+defaults: {screen_ocr: tesseract, document_ocr: azure-di, extraction: llm-cloud}
+fallback:
+  on_error: [tesseract]
+  low_confidence: {threshold: 0.75, escalate_to: azure-di}
+storage: {data_dir: ./data}

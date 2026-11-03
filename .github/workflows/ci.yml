@@ -1,0 +1,67 @@
+# Runs on every push: unit tests on Linux, and a real install of DocFlow on a clean Windows PC
+# using the same one-click installer customers use (windows/get-docflow.ps1).
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Tesseract (English + Arabic)
+        run: sudo apt-get update -q && sudo apt-get install -y -q tesseract-ocr tesseract-ocr-ara
+      - run: pip install -r requirements.txt
+      - run: python samples/make_samples.py
+      - run: python -m pytest -q
+
+  install-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Tesseract OCR
+        run: choco install tesseract -y --no-progress
+      - name: Install DocFlow from GitHub exactly like a customer PC
+        shell: powershell
+        env:
+          DOCFLOW_REPO: ${{ github.repository }}
+          DOCFLOW_REF: ${{ github.sha }}
+          DOCFLOW_DIR: C:\OneOffice\DocFlow
+          DOCFLOW_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCFLOW_NO_START: "1"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $h = @{ Authorization = "Bearer $env:DOCFLOW_GITHUB_TOKEN"; Accept = "application/vnd.github.raw"; "User-Agent" = "ci" }
+          Invoke-RestMethod "https://api.github.com/repos/$env:DOCFLOW_REPO/contents/windows/get-docflow.ps1?ref=$env:DOCFLOW_REF" -Headers $h | Invoke-Expression
+      - name: Start the service and check it answers
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File","C:\OneOffice\DocFlow\windows\start.ps1" -WindowStyle Hidden
+          for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep 3
+            try { $v = Invoke-RestMethod http://localhost:8085/api/docs/v1/admin/version; break } catch {}
+          }
+          if (-not $v) { throw "DocFlow did not start" }
+          $v | Format-List
+          $ui = Invoke-WebRequest http://localhost:8085/ui -UseBasicParsing
+          if ($ui.Content -notmatch "OneOffice DocFlow") { throw "UI did not load" }
+          "DocFlow $($v.version) is running"
+      - name: Update check (should say up to date)
+        shell: powershell
+        env:
+          DOCFLOW_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCFLOW_REF: ${{ github.sha }}
+          DOCFLOW_NO_START: "1"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File C:\OneOffice\DocFlow\windows\get-docflow.ps1

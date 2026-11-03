@@ -1,0 +1,83 @@
+# Default configuration: choose ONE deployment profile and enable option packs.
+# Secrets use ${ENV_VAR} placeholders - never commit real keys.
+
+deployment_profile: ${DOCAUTO_PROFILE:-onprem_hybrid}   # onprem_airgapped | onprem_hybrid | cloud_saas
+
+option_packs:                            # each pack is installed/licensed separately
+  tier1_opensource: ${DOCAUTO_PACK_OPENSOURCE:-true}   # Option 1: bundled free engines (Tesseract, PaddleOCR)
+  tier2_cloud: ${DOCAUTO_PACK_CLOUD:-true}             # Option 2: licensed / cloud connectors (Azure, Google, AWS, ABBYY)
+  tier3_ai: ${DOCAUTO_PACK_AI:-true}                   # Option 3: AI extraction (frontier API or self-hosted LLM)
+
+residency:
+  allowed_regions: ${DOCAUTO_ALLOWED_REGIONS:-}   # comma list, e.g. ["uaenorth", "me-central-1", "eu"]; empty = no region filter
+  allow_cross_border: false
+
+providers:
+  allow: ["*"]
+  deny: ${DOCAUTO_DENY:-}                  # comma list of engine ids
+  settings:
+    tesseract:
+      config:
+        tesseractCmd: ${TESSERACT_CMD:-}
+    azure-di:
+      config:
+        endpoint: ${AZURE_DI_ENDPOINT}
+        region: ${AZURE_DI_REGION:-westeurope}
+        apiVersion: "2024-11-30"
+      credentials:
+        apiKey: ${AZURE_DI_KEY}
+    aws-textract:
+      config:
+        region: ${AWS_REGION:-}
+      credentials:
+        accessKeyId: ${AWS_ACCESS_KEY_ID:-}
+        secretAccessKey: ${AWS_SECRET_ACCESS_KEY:-}
+    google-docai:
+      config:
+        projectId: ${GCP_PROJECT:-}
+        location: ${DOCAI_LOCATION:-eu}
+        ocrProcessorId: ${DOCAI_OCR_PROCESSOR:-}
+        formProcessorId: ${DOCAI_FORM_PROCESSOR:-}
+      credentials:
+        serviceAccountFile: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+    abbyy:
+      config:
+        product: ${ABBYY_PRODUCT:-}       # vantage | fre | cloud  (template - see connector README)
+    llm-cloud:
+      config:
+        baseUrl: ${LLM_BASE_URL:-}
+        model: ${LLM_MODEL:-}
+        sendImages: ${LLM_SEND_IMAGES:-true}
+        region: ${LLM_REGION:-}
+      credentials:
+        apiKey: ${LLM_API_KEY:-}
+    llm-local:
+      config:
+        baseUrl: ${LOCAL_LLM_BASE_URL:-}
+        model: ${LOCAL_LLM_MODEL:-}
+        sendImages: false
+
+defaults:
+  screen_ocr: ${DOCAUTO_DEFAULT_SCREEN_OCR:-tesseract}
+  document_ocr: ${DOCAUTO_DEFAULT_OCR:-tesseract}      # tesseract | paddleocr | azure-di | google-docai | aws-textract
+  extraction: ${DOCAUTO_DEFAULT_EXTRACTION:-builtin-rules}   # builtin-rules | llm-local | llm-cloud
+
+fallback:
+  on_error: [tesseract]                  # engines tried last if the chosen one fails
+  low_confidence:
+    threshold: ${DOCAUTO_ESCALATE_THRESHOLD:-0.70}   # mean OCR line confidence below this...
+    escalate_to: ${DOCAUTO_ESCALATE_TO:-}                    # ...re-run with this engine (e.g. azure-di). Opt-in: costs credits
+
+human_review:
+  field_confidence_threshold: ${DOCAUTO_FIELD_THRESHOLD:-0.85}
+  document_confidence_threshold: ${DOCAUTO_DOC_THRESHOLD:-0.80}
+
+router:
+  max_retries: 2
+  backoff_seconds: 0.5
+
+storage:
+  data_dir: ${DOCAUTO_DATA_DIR:-./data}
+  retention_days: 30
+
+workers: 4

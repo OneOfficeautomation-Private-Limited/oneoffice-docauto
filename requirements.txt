@@ -1,0 +1,23 @@
+# core
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9
+pyyaml>=6.0
+httpx>=0.27
+pillow>=10.0
+numpy>=1.26
+opencv-python-headless>=4.9
+pypdfium2>=4.28
+pdfplumber>=0.11
+openpyxl>=3.1
+# option pack 1 (open source)
+pytesseract>=0.3.10
+# paddleocr / paddlepaddle  -> install only where wanted (large)
+# option pack 2 (cloud) - install per connector
+# boto3                     -> aws-textract
+# google-cloud-documentai   -> google-docai
+# (azure-di uses httpx, no SDK needed)
+# dev / samples
+pytest>=8.0
+reportlab>=4.0

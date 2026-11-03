@@ -1,0 +1,18 @@
+{
+  "id": "llm-cloud",
+  "displayName": "AI extraction - frontier LLM API",
+  "version": "1.0.0",
+  "vendor": "Any OpenAI-compatible Chat Completions API",
+  "tier": 3,
+  "kind": "extraction",
+  "entrypoint": "LlmExtractionProvider",
+  "capabilities": ["extract_schema", "classify"],
+  "languages": ["*"],
+  "runsLocally": false,
+  "regions": [],
+  "creditCostPerPage": {"extract_schema": 10, "classify": 2},
+  "credentialTypes": ["api_key"],
+  "license": "Commercial (BYOK or resold)",
+  "configSchema": {"baseUrl": "https://<provider>/v1", "model": "vision-capable model id", "sendImages": true, "region": "processing region for residency policy", "temperature": 0},
+  "notes": "Point baseUrl at any provider/gateway exposing /chat/completions. For providers with a different native API, add a sibling connector."
+}
