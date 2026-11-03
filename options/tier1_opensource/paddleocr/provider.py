@@ -7,6 +7,8 @@ you pin.
 """
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 from docauto.errors import ProviderError
@@ -23,6 +25,7 @@ class PaddleOcrProvider(OcrProvider):
         try:
             import paddleocr  # noqa: F401
             self._engines = {}
+            self._lock = threading.Lock()   # one engine object is not safe across worker threads
             return HealthStatus(True, "paddleocr installed")
         except Exception as e:
             return HealthStatus(False, f"paddleocr not installed: {e}")
@@ -31,10 +34,21 @@ class PaddleOcrProvider(OcrProvider):
         from paddleocr import PaddleOCR
 
         if lang not in self._engines:
+            cfg = self.ctx.config
+            # 3.x defaults, measured on Windows CPU (paddlepaddle 3.3.1, paddleocr 3.7.0):
+            # - oneDNN crashes ("ConvertPirAttribute2RuntimeAttribute not support"), so it is off unless enabled;
+            # - mobile models read a page in ~7-13 s vs ~30-60 s for the default medium ones, same accuracy here;
+            # - page orientation/unwarping models are skipped: ingest() already deskews.
+            kw = dict(lang=lang, enable_mkldnn=bool(cfg.get("enableMkldnn", False)),
+                      use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False,
+                      text_detection_model_name=cfg.get("detModel", "PP-OCRv5_mobile_det"))
+            rec = cfg.get("recModel") or ("en_PP-OCRv5_mobile_rec" if lang == "en" else None)
+            if rec:
+                kw["text_recognition_model_name"] = rec
             try:
+                self._engines[lang] = PaddleOCR(**kw)
+            except TypeError:  # 2.x signature
                 self._engines[lang] = PaddleOCR(lang=lang, use_angle_cls=True)
-            except TypeError:  # 3.x signature
-                self._engines[lang] = PaddleOCR(lang=lang)
         return self._engines[lang]
 
     @staticmethod
@@ -57,13 +71,14 @@ class PaddleOcrProvider(OcrProvider):
 
     def recognize(self, req: RecognizeRequest) -> DocumentResult:
         lang = LANG_MAP.get((req.languages or ["en"])[0], "en")
-        engine = self._engine(lang)
         doc = DocumentResult(documentId=req.document_id)
         for pno, img in enumerate(req.pages, 1):
             W, H = img.size
-            arr = np.array(img)
+            arr = np.array(img.convert("RGB"))
             try:
-                raw = engine.predict(arr) if hasattr(engine, "predict") else engine.ocr(arr)
+                with self._lock:
+                    engine = self._engine(lang)
+                    raw = engine.predict(arr) if hasattr(engine, "predict") else engine.ocr(arr)
             except Exception as e:
                 raise ProviderError(f"paddleocr failed: {e}", self.info.id)
             page = Page(pageNumber=pno, width=W, height=H)
