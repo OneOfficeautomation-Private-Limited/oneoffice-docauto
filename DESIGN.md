@@ -314,9 +314,9 @@ API paths, ids and pack folder names are unchanged, so bots and the action packa
 
 ## 11. Distribution: install and update from GitHub (v3.1)
 
-The component is kept in a private GitHub repository; PCs install and update from it (details in `GITHUB.md`).
+The component is kept in a public GitHub repository (`OneOfficeautomation-Private-Limited/oneoffice-docauto`); PCs install and update from it without signing in (details in `GITHUB.md`).
 
-- **Installer:** `windows/Install-OneOffice-DocFlow.bat` (downloadable from Settings > Updates & install with the repository filled in, and attached to each GitHub release). It fetches `windows/get-docflow.ps1` through the GitHub API with a read-only fine-grained token, stored per Windows user with DPAPI.
+- **Installer:** `windows/Install-OneOffice-DocFlow.bat` (downloadable from Settings > Updates & install with the repository filled in, and attached to each GitHub release). It fetches `windows/get-docflow.ps1` through the GitHub API anonymously. A token is optional: it lifts GitHub's anonymous rate limit, or gives access to a private copy, and is stored per Windows user with DPAPI.
 - **Updater:** `get-docflow.ps1` checks the latest commit/release, stops the service, backs up code + database to `backups/` (last 5), mirrors code folders, keeps `config/local.env`, `data/`, `tessdata/`, `.venv/`, reinstalls packages only when `requirements.txt` changed, restarts. A git working copy is updated with `git pull`. Channel via `DOCFLOW_REF`: `main`, `release`, or a tag.
 - **UI/API:** `GET /api/docs/v1/admin/version`, `POST /admin/update` (Windows: opens the updater window), `GET /admin/installer.bat`.
 - **CI:** Linux tests + a real install on a clean Windows runner through the same installer; tag `vX.Y.Z` (matching `VERSION`) publishes a release.

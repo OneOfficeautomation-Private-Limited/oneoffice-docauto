@@ -1,8 +1,8 @@
 <#
   OneOffice DocFlow - install or update from GitHub (Windows PowerShell 5.1+)
 
-  First install on a new PC (paste in PowerShell, replace OWNER):
-    $env:DOCFLOW_REPO='OWNER/oneoffice-docauto'; $t=Read-Host 'GitHub token'; $env:DOCFLOW_GITHUB_TOKEN=$t; irm "https://api.github.com/repos/$env:DOCFLOW_REPO/contents/windows/get-docflow.ps1" -Headers @{Authorization="Bearer $t";Accept='application/vnd.github.raw'} | iex
+  First install on a new PC (paste in PowerShell):
+    $env:DOCFLOW_REPO='OneOfficeautomation-Private-Limited/oneoffice-docauto'; irm "https://api.github.com/repos/$env:DOCFLOW_REPO/contents/windows/get-docflow.ps1" -Headers @{Accept='application/vnd.github.raw'} | iex
 
   Update an installed copy: double-click windows\update.bat (or the "Update OneOffice DocFlow"
   Start-menu shortcut, or Settings > Updates in the web UI).
@@ -11,7 +11,8 @@
     DOCFLOW_REPO          owner/repo                 (saved in config\local.env after the first run)
     DOCFLOW_REF           branch or tag, default main; "release" = latest GitHub release
     DOCFLOW_DIR           install folder, default %USERPROFILE%\OneOffice\DocFlow
-    DOCFLOW_GITHUB_TOKEN  token with read access to the repo (private repos). Saved encrypted
+    DOCFLOW_GITHUB_TOKEN  optional for the public repo; needed for a private copy, or when GitHub's
+                          hourly limit for anonymous downloads is reached. Saved encrypted
                           for this Windows user only (DPAPI), so it is asked once.
     DOCFLOW_FORCE=1       reinstall even when already up to date
     DOCFLOW_NO_START=1    do not start DocFlow afterwards
@@ -61,7 +62,7 @@ function Save-LocalEnv($key, $value) {
 # ------------------------------------------------------------------ repo + ref
 $Repo = $env:DOCFLOW_REPO
 if (-not $Repo) { $Repo = Read-LocalEnv "DOCFLOW_REPO" }
-if (-not $Repo) { $Repo = Read-Host "GitHub repository (owner/name, e.g. oneofficeautomation/oneoffice-docauto)" }
+if (-not $Repo) { $Repo = Read-Host "GitHub repository (owner/name, e.g. OneOfficeautomation-Private-Limited/oneoffice-docauto)" }
 $Repo = $Repo.Trim().Trim("/") -replace '^https://github.com/', '' -replace '\.git$', ''
 if ($Repo -notmatch '^[\w.-]+/[\w.-]+$') { throw "Not a GitHub repository name: '$Repo' (expected owner/name)" }
 $Ref = $env:DOCFLOW_REF
@@ -100,10 +101,12 @@ function Get-SavedToken {
 }
 function Ask-Token {
     Write-Host ""
-    Write-Host "  The repository is private, so DocFlow needs a GitHub token (asked once per PC)." -ForegroundColor Yellow
+    Write-Host "  GitHub refused access to $Repo. A GitHub token fixes this (asked once per PC)." -ForegroundColor Yellow
+    Write-Host "  Public repository: GitHub's hourly limit for anonymous downloads was probably reached"
+    Write-Host "  on this network. Wait an hour, or use any token (Repository access: Public repositories)."
+    Write-Host "  Private copy: the token needs Repository access: only $Repo, Contents = Read-only."
     Write-Host "  Create one: github.com > Settings > Developer settings > Fine-grained tokens > Generate"
-    Write-Host "  Repository access: only $Repo   Permissions: Contents = Read-only"
-    $sec = Read-Host "  Paste the token" -AsSecureString
+    $sec = Read-Host "  Paste the token (or press Enter to try again without one)" -AsSecureString
     $t = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
     return $t.Trim()
 }
@@ -124,7 +127,7 @@ function GH-Try($path) {
         catch {
             $code = 0; try { $code = [int]$_.Exception.Response.StatusCode } catch {}
             if ($code -in 401, 403, 404) {
-                if ($i -eq 2) { throw "GitHub refused access to $Repo (HTTP $code). Check the repository name and that the token has Contents: Read-only on it." }
+                if ($i -eq 2) { throw "GitHub refused access to $Repo (HTTP $code). Check the repository name; for HTTP 403 wait an hour or use a token; a private copy needs a token with Contents: Read-only." }
                 if (Test-Path $TokenFile) { Remove-Item $TokenFile -Force }
                 $script:Token = Ask-Token
                 continue
