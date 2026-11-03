@@ -1,7 +1,14 @@
 """Field validation, confidence scoring and the human-review decision.
 
-Order: per-field checks -> cross-field rules (passing rules corroborate their
-fields) -> per-field review decision -> document confidence.
+Order: per-field checks (a value that exactly matches its pattern is slightly
+corroborated) -> cross-field rules (passing rules corroborate their fields) ->
+per-field review decision -> document confidence.
+
+The boosts are calibrated with the benchmark (python -m docauto.benchmark): local
+OCR rarely rates a line above ~0.93, so without corroboration a correctly read
+identifier (0.9 x 0.93 = 0.84) could never pass the 0.85 review threshold. A
+pattern match is weaker evidence than an arithmetic rule, because a misread digit
+can still fit the pattern, hence the smaller boost.
 """
 from __future__ import annotations
 
@@ -10,6 +17,10 @@ import re
 
 from .extraction import safe_eval
 from .models import DocumentResult, FieldSchema, ReviewStatus
+
+PATTERN_BOOST = 0.05   # value fully matches the field's regex
+RULE_BOOST = 0.15      # every cross-field rule naming the field passed
+MAX_CONFIDENCE = 0.99
 
 
 def _rule_names(rule: str) -> set[str]:
@@ -41,6 +52,9 @@ def score(doc: DocumentResult, schema: FieldSchema | None, field_threshold: floa
         fld.validation.passed = not errs
         if new_errs and fld.confidence:
             fld.confidence = round(fld.confidence * 0.5, 4)
+        elif (fd and fd.regex and not errs and fld.confidence and isinstance(fld.value, str)
+              and re.fullmatch(fd.regex, fld.value)):
+            fld.confidence = round(min(MAX_CONFIDENCE, fld.confidence + PATTERN_BOOST), 4)
 
     # 2) cross-field rules
     if schema and schema.validation:
@@ -57,7 +71,7 @@ def score(doc: DocumentResult, schema: FieldSchema | None, field_threshold: floa
             names = _rule_names(rule)
             for fld in doc.fields:  # a passing consistency rule corroborates its fields
                 if fld.name in names and fld.confidence is not None and fld.validation.passed:
-                    fld.confidence = round(min(0.99, fld.confidence + 0.15), 4)
+                    fld.confidence = round(min(MAX_CONFIDENCE, fld.confidence + RULE_BOOST), 4)
 
     # 3) per-field review decision
     for fld in doc.fields:

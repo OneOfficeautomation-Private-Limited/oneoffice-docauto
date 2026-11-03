@@ -14,10 +14,30 @@ from typing import Any, Optional
 from .models import Classification, DocumentResult, ExtractedField, FieldDef, FieldSchema, Line
 from .provider import Capability, ExtractionProvider, ExtractRequest, ProviderInfo
 
-_NUM = re.compile(r"[-+]?\d[\d,\s]*(?:[.,]\d+)?")
+_NUM = re.compile(r"[-+]?\d[\d,\s]*(?:[.,]\d+)*")
+_DIGIT_GAP = re.compile(r"(?<=\d) (?=\d)")
 _AR_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789")
 _DATE_FORMATS = ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y", "%Y/%m/%d",
                  "%d %b %Y", "%d %B %Y", "%b %d, %Y", "%B %d, %Y"]
+
+
+def _to_float(s: str) -> float:
+    """Number with thousands/decimal separators in any common style.
+
+    1,234.50 / 1.234,50 / 6.257.13 (OCR read a comma as a dot) -> the last separator is the decimal
+    mark, unless it is followed by exactly three digits and every separator is the same
+    (1,234,567). A single '.' is decimal; a single ',' before three digits is thousands.
+    """
+    s = s.replace(" ", "").rstrip(",.")
+    seps = [i for i, ch in enumerate(s) if ch in ".,"]
+    if not seps:
+        return float(s)
+    last, tail = seps[-1], len(s) - seps[-1] - 1
+    if len(seps) == 1:
+        return float(s.replace(",", "") if s[last] == "," and tail == 3 else s.replace(",", "."))
+    if tail == 3 and len({s[i] for i in seps}) == 1:
+        return float(re.sub(r"[.,]", "", s))
+    return float(re.sub(r"[.,]", "", s[:last]) + "." + s[last + 1:])
 
 
 def coerce(value: str, ftype: str, fmt: Optional[str] = None) -> tuple[Any, bool]:
@@ -27,14 +47,8 @@ def coerce(value: str, ftype: str, fmt: Optional[str] = None) -> tuple[Any, bool
         m = _NUM.search(v)
         if not m:
             return value, False
-        s = m.group(0).replace(" ", "")
-        if "," in s and "." in s:
-            s = s.replace(",", "")
-        elif "," in s:
-            parts = s.split(",")
-            s = s.replace(",", "") if len(parts[-1]) == 3 else s.replace(",", ".")
         try:
-            return float(s), True
+            return _to_float(m.group(0)), True
         except ValueError:
             return value, False
     if ftype == "date":
@@ -124,6 +138,16 @@ class RulesExtractor(ExtractionProvider):
                     page, line = self._locate(doc, raw)
                     return self._field(f, val, raw, line.confidence if line else None, page,
                                        line.bbox if line else None, 0.9)
+            # OCR often splits long numbers with a space ("35075291 7034233"): retry per line without them
+            for p in doc.pages:
+                for line in p.lines:
+                    joined = _DIGIT_GAP.sub("", line.text)
+                    m = re.search(f.regex, joined, re.IGNORECASE) if joined != line.text else None
+                    if m:
+                        raw = m.group(1) if m.groups() else m.group(0)
+                        val, ok = coerce(raw, f.type, f.format)
+                        if ok:
+                            return self._field(f, val, raw, line.confidence, p.pageNumber, line.bbox, 0.9)
         # 3) "Label: value" on the same line, or value on the next line.
         #    Most specific label wins (longest, at line start); tolerant to small OCR errors.
         matches = []
