@@ -16,9 +16,6 @@ dev = ["pytest>=8.0"]
 [tool.setuptools.packages.find]
 include = ["docauto*"]
 
-[tool.setuptools.package-data]
-"docauto.api" = ["static/*.html"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

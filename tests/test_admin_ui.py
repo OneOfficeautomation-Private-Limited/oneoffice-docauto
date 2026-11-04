@@ -28,9 +28,12 @@ def client(tmp_path, monkeypatch):
         os.environ.pop(k, None)
 
 
-def test_ui_served(client):
-    assert "Document Automation" in client.get("/ui").text
-    assert client.get("/", follow_redirects=False).status_code in (302, 307)
+def test_no_screens_of_its_own(client):
+    """The screens are in the OOA Command Center; DocFlow answers its address with where to find them."""
+    root = client.get("/").json()
+    assert root["service"] == "OneOffice DocFlow" and "Command Center" in root["screens"]
+    for old in ("/ui", "/validation", "/ui/docflow.js", "/favicon.ico"):
+        assert client.get(old).status_code == 404
 
 
 def test_settings_roundtrip_masks_secrets_and_reloads(client):

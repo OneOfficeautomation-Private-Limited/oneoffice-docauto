@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from .. import tenants
@@ -23,7 +23,6 @@ from ..errors import DocAutoError, InvalidInput, PolicyDenied, ProviderUnavailab
 from ..models import FieldSchema
 from ..pipeline import DocumentService, ProcessOptions
 
-STATIC = Path(__file__).parent / "static"
 API = "/api/docs/v1"
 
 app = FastAPI(title="Oneoffice Document Automation", version="1.0.0",
@@ -277,11 +276,6 @@ def complete_review(doc_id: str, body: ReviewSubmit, _: str = Depends(auth)):
             "fields": {f.name: f.value for f in res.fields}}
 
 
-@app.get("/validation")
-def validation_station():
-    return FileResponse(STATIC / "validation.html")
-
-
 # ------------------------------------------------------------------ usage
 @app.get(f"{API}/usage")
 def usage(groupBy: str = "provider_id", _: str = Depends(auth)):
@@ -292,8 +286,6 @@ def usage(groupBy: str = "provider_id", _: str = Depends(auth)):
 
 
 # ------------------------------------------------------------------ admin (used by the web UI)
-from fastapi.responses import RedirectResponse  # noqa: E402
-
 from .. import settings as settings_mod  # noqa: E402
 
 
@@ -442,36 +434,12 @@ def test_provider(provider_id: str, _: str = Depends(auth)):
         return {"ok": False, "stage": "call", "message": f"{type(e).__name__}: {e}"}
 
 
-@app.get("/ui")
-def ui():
-    return FileResponse(STATIC / "app.html", headers={"Cache-Control": "no-cache"})
-
-
-_BRAND = {"favicon.png": "image/png", "ooa-logo.png": "image/png",
-          "ooa-logo.svg": "image/svg+xml", "ooa-mark.svg": "image/svg+xml"}
-
-
-@app.get("/ui/brand/{name}")
-def ui_brand(name: str):
-    if name not in _BRAND:
-        raise HTTPException(404, "not found")
-    return FileResponse(STATIC / "brand" / name, media_type=_BRAND[name],
-                        headers={"Cache-Control": "public, max-age=86400"})
-
-
-@app.get("/favicon.ico")
-def favicon():
-    return FileResponse(STATIC / "brand" / "favicon.png", media_type="image/png")
-
-
-@app.get("/ui/docflow.js")
-def ui_docflow_js():
-    return FileResponse(STATIC / "docflow.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
-
-
 @app.get("/")
 def root():
-    return RedirectResponse("/ui")
+    """DocFlow has no screens of its own: they are in the OOA Command Center (AI > Document Automation)."""
+    from .. import updates
+    return {"service": "OneOffice DocFlow", "version": updates.version_info().get("version"),
+            "screens": "OOA Command Center: AI > Document Automation", "api": "/api/docs/v1", "apiDocs": "/docs"}
 
 
 # ================================================================== Oneoffice DocFlow

@@ -118,7 +118,7 @@ A connector that is enabled but not configured (missing key, SDK not installed) 
 │  extraction.py   built-in rules extractor + safe rule evaluator  │
 │  scoring.py      field checks, cross-field rules, review decision│
 │  store.py        SQLite: jobs, documents, schemas, usage meter   │
-│  api/app.py      REST API + Validation Station (/validation)     │
+│  api/app.py      REST API (screens: OOA Command Center)          │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -159,8 +159,7 @@ An explicit request for a forbidden engine returns `403 POLICY_DENIED`. Data nev
 | REST API | `docauto/api/app.py` | Calls `/api/docs/v1/...`; replace `auth()` with platform token validation |
 | Designer actions | `integration/action-package.json` | Registers 9 actions with inputs/outputs mapped to REST calls (AA-style package) |
 | Java client | `clients/java/.../DocAutoClient.java` | Zero-dependency client for the Java bot runner |
-| Web UI | `/ui` (`?embed=1#/option/<pack>` per-page embedding) | Option 1/2/3 configuration and testing, process, compare, document types, review, usage, settings; host can embed pages in its web view |
-| Validation Station | `/validation` (`?doc=<id>` deep link) | Embed in the control room, or create a human task that links to it |
+| Screens | OOA Command Center, AI > Document Automation (`/documents/`) | Inbox, processes, document types, reference data, engines, Test lab; reviews arrive in the Task inbox. DocFlow's own web UI was removed (Nov 2026) |
 | Admin | `config/document-service.yaml` | Map to the host's admin UI: profile, packs, engine keys, thresholds |
 | Usage | `/api/docs/v1/usage` | Feed the host's licensing / billing dashboard |
 
@@ -188,7 +187,7 @@ An explicit request for a forbidden engine returns `403 POLICY_DENIED`. Data nev
 4. Tenants (`docauto/tenants.py`): each `X-OOA-Tenant` gets its own database and files under `<data_dir>/tenants/<tenant>` and
    its own routing settings (cloud opt-in, retry chain, thresholds); engine keys and the profile stay server-wide. Without
    the header a request belongs to `default`, the single-client install that keeps the base data folder.
-5. Hook "Send to validation" into the host's human-task inbox (deep link `/validation?doc=<id>`).
+5. Reviews: the Command Center turns documents waiting for review into Task inbox tasks that open its review screen.
 6. Map `config/document-service.yaml` into the admin console (profile, option packs, engine keys, thresholds).
 7. Optionally swap `store.py` (SQLite) for the platform database.
 
@@ -291,7 +290,7 @@ The UI uses the OneOffice Automation logo (two interlocking rings) and brand col
 | OneMind accent | `#B0307E` | AI option |
 | Font | Poppins (Google Fonts), system fallback | All UI text |
 
-Assets are served from `/ui/brand/`: `ooa-logo.svg` (full logo), `ooa-mark.svg` (rings only), `ooa-logo.png`, `favicon.png` (also at `/favicon.ico`).
+These were DocFlow's own web UI, removed in November 2026: the screens are now part of the OOA Command Center and use the platform's design system.
 
 ### 10.2 Naming map
 

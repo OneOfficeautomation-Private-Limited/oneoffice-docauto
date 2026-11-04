@@ -29,12 +29,12 @@ pytest -q
 DOCAUTO_CONFIG=config/document-service.yaml uvicorn docauto.api.app:app --port 8085
 ```
 
-Then open:
-
-- http://localhost:8085/ui: DocFlow with the OneOffice brand: One View (home), One Inbox, OneFlow (processes), One Library (doc types, ✨ Teach One), One Desk (review), One Source (master data), and the OneEngine pages: OneCore (open source), OneConnect (cloud & licensed), OneMind (AI), One-click test, One-to-one compare, OneMeter (usage), Settings
+DocFlow is a service without screens of its own: people use it through the OOA Command Center
+(AI > Document Automation: inbox, processes, document types, reference data, engines, Test lab, and reviews in the
+Task inbox). See "With the OOA platform" below.
 
 - http://localhost:8085/docs: interactive API
-- http://localhost:8085/validation: Validation Station
+- http://localhost:8085/: where to find the screens, and the version
 
 Or with Docker:
 

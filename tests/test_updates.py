@@ -37,7 +37,5 @@ def test_update_only_on_windows():
     assert client.post(f"{API}/admin/update").status_code == 409
 
 
-def test_brand_assets_served():
-    assert client.get("/ui/brand/ooa-mark.svg").headers["content-type"].startswith("image/svg")
-    assert client.get("/ui/brand/../app.py").status_code == 404
-    assert client.get("/favicon.ico").status_code == 200
+def test_old_brand_assets_are_gone():
+    assert client.get("/ui/brand/ooa-mark.svg").status_code == 404

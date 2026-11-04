@@ -55,8 +55,8 @@ jobs:
           }
           if (-not $v) { throw "DocFlow did not start" }
           $v | Format-List
-          $ui = Invoke-WebRequest http://localhost:8085/ui -UseBasicParsing
-          if ($ui.Content -notmatch "OneOffice DocFlow") { throw "UI did not load" }
+          $root = Invoke-RestMethod http://localhost:8085/
+          if ($root.service -ne "OneOffice DocFlow") { throw "DocFlow did not answer" }
           "DocFlow $($v.version) is running"
       - name: Update check (should say up to date)
         shell: powershell

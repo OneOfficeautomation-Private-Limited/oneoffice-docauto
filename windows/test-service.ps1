@@ -18,4 +18,4 @@ $out = & curl.exe @curlArgs "$base/documents?wait=true"
 $doc = ($out | ConvertFrom-Json).documentId
 Write-Host "Extracted fields (document $doc):" -ForegroundColor Cyan
 Invoke-RestMethod "$base/documents/$doc/fields" -Headers $h | ConvertTo-Json -Depth 5
-Write-Host "Open http://localhost:$port/validation to review low-confidence fields."
+Write-Host "Review low-confidence fields in the OOA Command Center (Task inbox, or AI > Document Automation)."

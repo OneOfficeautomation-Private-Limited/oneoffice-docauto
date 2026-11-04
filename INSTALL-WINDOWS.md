@@ -21,31 +21,18 @@ If `winget` isn't available, install these by hand, then run `install.bat` again
 
 ## 2. Use OneOffice DocFlow
 
-Open **http://localhost:8085/ui**.
+DocFlow has no screens of its own. People use it in the **OOA Command Center**, under **AI > Document Automation**:
+Inbox (add documents), Processes (the six stages: Intake, Classify & split, Extract, Checks, Review, Deliver), Document
+types (with Teach from samples), Reference data, Engines (with Test and Configure) and Test lab. Documents that need a
+person arrive in the **Task inbox**. Connecting DocFlow to the Command Center (token, address) is described in the
+platform's `docs/DOCUMENT_AUTOMATION.md` and in the README ("With the OOA platform").
 
-1. **One Inbox:** drop any document, even one scanned PDF holding several documents. DocFlow recognises each part, splits it and extracts the fields.
-2. **One Library** (doc types): the library has Invoice, Purchase order, Receipt, Bank statement and ID document. **✨ Teach One** creates a new type from 1–3 example files.
-3. **One Source** (master data): upload your supplier list (CSV or Excel) to use in lookup rules.
-4. **OneFlow → + New flow:** set the six stages (Intake, Classify & split, Extract, Rules & lookups, Review, Deliver), create the flow, test it with **Upload documents**, then **Go live** so bots and watched folders can use it.
-5. **One Desk:** approve or correct what needs a person; overdue items are highlighted.
+## 2b. Configure engines
 
-## 2b. Configure engines (web UI)
+In the Command Center: **AI > Document Automation > Engines**, then **Configure** and **Test** on each engine. On a
+server without the Command Center, use the command-line wizard below.
 
-Start the service (step 3) and open **http://localhost:8085/ui**. Everything below can be done there, with no restart:
-
-| Page | What you do there |
-|---|---|
-| **OneCore** (open source) | Check Tesseract / PaddleOCR status, set the tesseract path, **Test engine** |
-| **OneConnect** (cloud & licensed) | Enter Azure / AWS / Google / ABBYY settings and keys, **Save**, **Test engine**, enable/disable each engine |
-| **OneMind** (AI extraction) | Point to a cloud LLM API or a local model (Ollama/vLLM), **Test engine** |
-| **One-click test** | Upload a file, pick engines, see fields with confidence, boxes on the page, text, tables, credits |
-| **One-to-one compare** | Run one file through several engines side by side |
-| **Document types** | Define the fields to extract (labels in English/Arabic, patterns, validation rules) |
-| **One Desk / OneMeter / Settings** | Approve low-confidence fields, see pages and credits, change profile and defaults |
-
-Each page can be embedded in the RPA tool on its own, without the side menu: `http://localhost:8085/ui?embed=1#/option/tier2_cloud`.
-
-### Alternative: command-line wizard
+### Command-line wizard
 
 Double-click **`windows\configure.bat`** and answer the questions. Press Enter to keep the current value.
 
@@ -65,13 +52,12 @@ The answers are saved in `config\local.env`, a plain text file you can also edit
 
 ## 3. Start
 
-Double-click **`windows\start.bat`**. The browser opens on the web UI. Keep the window open while you use the service, and press Ctrl+C to stop it.
+Double-click **`windows\start.bat`**. Keep the window open while you use the service, and press Ctrl+C to stop it.
 
 | Page | URL |
 |---|---|
-| Web UI | http://localhost:8085/ui |
+| Screens | OOA Command Center: AI > Document Automation |
 | API (try every call) | http://localhost:8085/docs |
-| Validation Station | http://localhost:8085/validation |
 | Engines and policy status | http://localhost:8085/api/docs/v1/providers |
 | Usage per engine | http://localhost:8085/api/docs/v1/usage |
 
