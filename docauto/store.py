@@ -90,6 +90,14 @@ class Store:
                    (doc_id, file_name, mime, sha, str(path), now()))
         return doc_id
 
+    def delete_document(self, doc_id: str) -> None:
+        """Forgets a document and its jobs and file (used by the Test lab: nothing it reads is kept). Usage stays."""
+        r = self._one("SELECT path FROM documents WHERE id=?", (doc_id,))
+        self._exec("DELETE FROM jobs WHERE document_id=?", (doc_id,))
+        self._exec("DELETE FROM documents WHERE id=?", (doc_id,))
+        if r and r["path"]:
+            Path(r["path"]).unlink(missing_ok=True)
+
     def file_bytes(self, doc_id: str) -> Optional[tuple[bytes, str, str]]:
         r = self._one("SELECT path,file_name,mime_type FROM documents WHERE id=?", (doc_id,))
         if not r:

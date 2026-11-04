@@ -726,6 +726,12 @@ def df_review_next(flow: Optional[str] = None, after: Optional[str] = None, _: s
     return {"documentId": service().store.next_for_validation(flow if flow and flow != "all" else None, after)}
 
 
+@app.post(f"{DF}/test")
+async def df_test(file: UploadFile = File(...), docType: str = Form(...), engines: str = Form("auto"), _: str = Depends(auth)):
+    """Test lab: the document read as docType by one or two engines (comma separated), side by side. Nothing is kept."""
+    return docflow().test_engines(await file.read(), file.filename or "document", docType, [e.strip() for e in engines.split(",")])
+
+
 @app.get(f"{DF}/overview")
 def df_overview(_: str = Depends(auth)):
     return docflow().overview()

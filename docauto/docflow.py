@@ -35,7 +35,7 @@ from typing import Any, Literal, Optional
 import httpx
 from pydantic import BaseModel, Field
 
-from .errors import InvalidInput
+from .errors import DocAutoError, InvalidInput
 from .extraction import coerce, safe_eval
 from .models import DocumentResult, ExtractedField, FieldDef, FieldSchema, ReviewStatus
 from .pipeline import DocumentService, ProcessOptions
@@ -983,6 +983,32 @@ class DocFlowService:
         return self._deliver(fl, docs[0]["id"], docs[0]["status"], only=delivery_id)
 
     # ---------------------------------------------------------------- teach from samples
+    def test_engines(self, data: bytes, file_name: str, dt_id: str, engines: list[str]) -> dict:
+        """Test lab: reads one document as a document type with each engine (no fallback to others), and forgets it
+        again: nothing is filed in a process, sent to review or delivered."""
+        dt = self.doctype(dt_id)
+        runs = []
+        for eng in (engines or ["auto"])[:2]:
+            opt = ProcessOptions(ocrProvider=eng or "auto", languages=dt.languages or ["en"], strictProvider=eng not in ("", "auto"),
+                                 schema=dt.schema())
+            t0 = time.time()
+            try:
+                res = self.svc.process_bytes(data, file_name, opt)
+            except DocAutoError as e:
+                runs.append({"engine": eng, "error": e.message})
+                continue
+            try:
+                runs.append({"engine": eng, "ms": int((time.time() - t0) * 1000), "confidence": res.mean_line_confidence(),
+                             "review": res.review.required,
+                             "readBy": list(dict.fromkeys(s.providerId for s in res.provenance.steps if s.stage == "digitize")),
+                             "fields": {f.name: {"value": f.value, "confidence": f.confidence, "passed": f.validation.passed,
+                                                 "errors": f.validation.errors} for f in res.fields}})
+            finally:
+                self.store.delete_document(res.documentId)
+        return {"docType": dt.id, "runs": runs,
+                "fields": [{"name": f.name, "label": (f.label or f.name).split(" / ")[0], "required": f.required}
+                           for f in dt.fields if f.type != "table"]}
+
     def suggest(self, files: list[tuple[bytes, str]]) -> dict:
         if not files:
             raise InvalidInput("upload 1 to 3 sample documents")
