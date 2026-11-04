@@ -22,6 +22,7 @@ import csv
 import io
 import json
 import logging
+import os
 import re
 import shutil
 import threading
@@ -526,9 +527,22 @@ def suggest_from_results(results: list[DocumentResult]) -> dict:
 
 
 # ================================================================== service
+def platform_callback(tenant: str) -> tuple[str, dict]:
+    """Where a platform "Start a bot" delivery goes: the Command Center (DOCAUTO_PLATFORM_URL; {tenant} is replaced in
+    SaaS), authenticated with this service's own token, so no secret is stored in a process."""
+    base = os.environ.get("DOCAUTO_PLATFORM_URL", "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError("DOCAUTO_PLATFORM_URL is not set: DocFlow does not know where the Command Center is")
+    headers = {"X-OOA-Tenant": tenant}
+    if os.environ.get("DOCAUTO_API_TOKEN"):
+        headers["Authorization"] = "Bearer " + os.environ["DOCAUTO_API_TOKEN"]
+    return base.replace("{tenant}", tenant) + "/api/docflow-callback/start-bot", headers
+
+
 class DocFlowService:
-    def __init__(self, svc: DocumentService):
+    def __init__(self, svc: DocumentService, tenant: str = "default"):
         self.svc = svc
+        self.tenant = tenant              # the platform tenant: "Start a bot" deliveries call back as this tenant
         self.store = svc.store
         self._lock = threading.Lock()
         self._xlsx_lock = threading.Lock()
@@ -636,7 +650,10 @@ class DocFlowService:
                 raise InvalidInput(f"rule '{r.name or r.type}': reference table '{r.params['table']}' not found")
         for i, d in enumerate(fl.deliveries):
             d.id = d.id or f"d{i + 1}"
-            if d.type in ("webhook", "start_bot") and not str(d.params.get("url", "")).startswith(("http://", "https://")):
+            if d.type == "start_bot" and d.params.get("platform"):  # the Command Center starts it: needs the bot, not an address
+                if not str(d.params.get("bot", "")).strip():
+                    raise InvalidInput(f"delivery '{d.name or d.type}': choose the bot to start")
+            elif d.type in ("webhook", "start_bot") and not str(d.params.get("url", "")).startswith(("http://", "https://")):
                 raise InvalidInput(f"delivery '{d.name or d.type}': URL must start with http:// or https://")
             if d.type in ("folder", "excel") and not d.params.get("path"):
                 raise InvalidInput(f"delivery '{d.name or d.type}': path is required")
@@ -888,14 +905,19 @@ class DocFlowService:
             try:
                 body = self.payload(fl, doc_id, status)
                 if dv.type in ("webhook", "start_bot"):
-                    if dv.type == "start_bot":
-                        body = {"bot": dv.params.get("bot", ""), "input": body}
                     headers = {"Content-Type": "application/json"}
+                    url = dv.params.get("url", "")
+                    if dv.type == "start_bot":
+                        body = {"bot": dv.params.get("bot", ""), "pool": dv.params.get("pool", ""),
+                                "requestedBy": dv.params.get("requestedBy", ""), "input": body}
+                        if dv.params.get("platform"):  # the OOA Command Center starts the bot (see platform_callback)
+                            url, extra = platform_callback(self.tenant)
+                            headers.update(extra)
                     if dv.params.get("authHeader"):
                         headers["Authorization"] = dv.params["authHeader"]
                     for attempt in range(2):
                         try:
-                            r = httpx.post(dv.params["url"], json=body, headers=headers, timeout=15)
+                            r = httpx.post(url, json=body, headers=headers, timeout=15)
                             ok, detail = r.status_code < 300, f"HTTP {r.status_code}"
                             if ok:
                                 break

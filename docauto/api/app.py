@@ -494,7 +494,7 @@ def docflow() -> DocFlowService:
             if df is None or df.svc is not svc:
                 if df is not None:
                     df.stop_watcher()
-                df = _dfs[tenant] = DocFlowService(svc)
+                df = _dfs[tenant] = DocFlowService(svc, tenant)
                 try:
                     df.migrate_instances()
                 except Exception:  # pragma: no cover - migration is best effort

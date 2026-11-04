@@ -25,6 +25,9 @@ DEPLOYMENT = [
      "help": "Comma-separated engine ids that must never be used."},
     {"key": "DOCAUTO_API_TOKEN", "label": "API token for the RPA tool", "type": "secret", "default": "",
      "help": "Empty = no authentication (local testing only)."},
+    {"key": "DOCAUTO_PLATFORM_URL", "label": "Command Center address", "type": "text", "default": "",
+     "placeholder": "http://127.0.0.1:8720",
+     "help": "Where \"Start a bot\" deliveries start their bot. In SaaS, {tenant} is replaced by the tenant."},
 ]
 DEFAULTS = [
     {"key": "DOCAUTO_DEFAULT_SCREEN_OCR", "label": "Screen OCR engine", "type": "engine", "kind": "ocr", "default": "tesseract"},

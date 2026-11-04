@@ -66,3 +66,38 @@ def test_service_token(client, monkeypatch):
     assert client.get(f"{DF}/flows", headers=as_tenant("acme")).status_code == 401
     ok = client.get(f"{DF}/flows", headers={**as_tenant("acme"), "Authorization": "Bearer s3cret"})
     assert ok.status_code == 200
+
+
+def test_start_a_bot_calls_the_command_center_with_the_token_and_tenant(client, monkeypatch):
+    """A platform "Start a bot" delivery goes to DOCAUTO_PLATFORM_URL as the flow's tenant; no secret sits in the flow."""
+    import docauto.api.app as appmod
+    import docauto.docflow as df
+    monkeypatch.setenv("DOCAUTO_PLATFORM_URL", "http://cc.example/{tenant}")
+    monkeypatch.setenv("DOCAUTO_API_TOKEN", "s3cret")
+    sent = []
+
+    class R:
+        status_code = 200
+
+    monkeypatch.setattr(df.httpx, "post", lambda url, json=None, headers=None, timeout=None: sent.append((url, json, headers)) or R())
+    hdr = {**as_tenant("acme"), "Authorization": "Bearer s3cret"}
+    fl = client.post(f"{DF}/flows", headers=hdr, json={"name": "AP", "docTypes": ["invoice"], "deliveries": [
+        {"type": "start_bot", "name": "ERP", "on": ["success"], "params": {"bot": "Finance/Post.flow.json", "platform": True, "requestedBy": "sara"}}]}).json()
+    svc = appmod._dfs["acme"]
+    monkeypatch.setattr(svc, "payload", lambda f, d, s: {"documentId": d, "fields": {"total": 1}})
+    out = svc._deliver(df.Flow.model_validate(fl), "doc1", "success")
+    assert out[0]["ok"], out
+    url, body, headers = sent[0]
+    assert url == "http://cc.example/acme/api/docflow-callback/start-bot"
+    assert headers["Authorization"] == "Bearer s3cret" and headers["X-OOA-Tenant"] == "acme"
+    assert body["bot"] == "Finance/Post.flow.json" and body["requestedBy"] == "sara" and body["input"]["documentId"] == "doc1"
+
+
+def test_start_a_bot_without_the_platform_address_says_so(client, monkeypatch):
+    import docauto.docflow as df
+    monkeypatch.delenv("DOCAUTO_PLATFORM_URL", raising=False)
+    try:
+        df.platform_callback("default")
+        raise AssertionError("expected an error")
+    except RuntimeError as e:
+        assert "DOCAUTO_PLATFORM_URL" in str(e)
