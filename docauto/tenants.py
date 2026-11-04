@@ -12,6 +12,7 @@ import json
 import re
 from contextvars import ContextVar
 from pathlib import Path
+from urllib.parse import unquote
 
 from . import settings
 
@@ -94,7 +95,8 @@ class TenantMiddleware:
             await send({"type": "http.response.start", "status": 400,
                         "headers": [(b"content-type", b"application/json")]})
             return await send({"type": "http.response.body", "body": body})
-        user = headers.get(USER_HEADER, b"").decode("utf-8", "replace").strip()[:200]
+        # the Command Center sends the name URL-encoded (UTF-8), so names in any script survive the header
+        user = unquote(headers.get(USER_HEADER, b"").decode("latin-1")).strip()[:200]
         t1, t2 = current.set(tenant), current_user.set(user)
         try:
             await self.app(scope, receive, send)

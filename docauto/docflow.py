@@ -143,6 +143,8 @@ class Delivery(BaseModel):
 class Intake(BaseModel):
     inputFolder: str = ""
     pollSeconds: int = 30
+    # email inbox, read by the OOA Command Center (IMAP or Microsoft 365; secrets are its vault references)
+    email: dict[str, Any] = Field(default_factory=dict)
 
 
 class Flow(BaseModel):
