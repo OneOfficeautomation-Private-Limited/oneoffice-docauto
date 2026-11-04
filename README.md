@@ -93,6 +93,18 @@ Then make them the defaults, e.g. `defaults.document_ocr: azure-di`, `defaults.e
 - **Python in-process:** `from docauto import DocumentService, ProcessOptions`.
 - Checklist: DESIGN.md §5.3.
 
+### With the OOA platform (AI > Document Automation)
+
+The OOA Command Center shows DocFlow's screens and forwards to it; set in `config/local.env`:
+
+| Setting | Value |
+| --- | --- |
+| `DOCAUTO_API_TOKEN` | the service token; the same value goes in the Command Center's vault (Settings > Document Automation) |
+| `DOCAUTO_PLATFORM_URL` | the Command Center's address, for "Start a bot" deliveries (`{tenant}` is replaced in SaaS) |
+
+Each platform tenant gets its own data under `data/tenants/<tenant>`. The full set-up, permissions and folders are in
+the platform's `docs/DOCUMENT_AUTOMATION.md`.
+
 ## Add a new engine (connector SDK)
 
 1. Create `options/<pack>/<engine>/manifest.json` (copy an existing one: id, tier, kind, capabilities, languages, runsLocally, creditCostPerPage).

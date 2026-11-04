@@ -101,3 +101,8 @@ def test_start_a_bot_without_the_platform_address_says_so(client, monkeypatch):
         raise AssertionError("expected an error")
     except RuntimeError as e:
         assert "DOCAUTO_PLATFORM_URL" in str(e)
+
+
+def test_overview_counts_this_month(client):
+    o = client.get(f"{DF}/overview", headers=as_tenant("acme")).json()
+    assert o["pagesThisMonth"] == 0 and o["creditsThisMonth"] == 0

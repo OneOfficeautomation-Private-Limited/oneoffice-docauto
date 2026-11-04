@@ -1091,7 +1091,12 @@ class DocFlowService:
             st = self.store.instance_stats(f.id)
             per.append({"id": f.id, "name": f.name, "isInbox": f.isInbox, "status": f.status, "stats": st})
         q = self.review_queue(None)
+        month = datetime.now(timezone.utc).strftime("%Y-%m-01")
+        used = self.store._one("SELECT COALESCE(SUM(u.pages),0) p, COALESCE(SUM(u.credits),0) cr FROM usage u JOIN documents d ON d.id=u.document_id "
+                               "WHERE d.instance_id IS NOT NULL AND u.ts >= ? AND u.capability IN ('ocr_printed','tables','ocr_handwriting','layout','key_value')",
+                               (month,))
         return {"totals": self.store.instance_stats(None), "flows": per, "review": len(q),
+                "pagesThisMonth": used["p"], "creditsThisMonth": used["cr"],
                 "overdue": sum(1 for x in q if x["overdue"]), "doctypes": len(self.doctypes()),
                 "recent": self.store.instance_documents(None, None, limit=12),
                 "deliveryFailures": sum(1 for d in self.store.delivery_list(None, 200) if not d["ok"])}
