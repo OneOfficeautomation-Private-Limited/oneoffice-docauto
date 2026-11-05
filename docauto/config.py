@@ -18,7 +18,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "defaults": {"screen_ocr": "tesseract", "document_ocr": "tesseract", "extraction": "builtin-rules"},
     "fallback": {"on_error": ["tesseract"], "low_confidence": {"threshold": 0.0, "escalate_to": None}},
     "human_review": {"field_confidence_threshold": 0.85, "document_confidence_threshold": 0.80},
-    "storage": {"data_dir": "./data", "retention_days": 30},
+    # database_url: None = DOCAUTO_DATABASE_URL, else an embedded PostgreSQL in <data_dir>/postgres (docauto.db)
+    "storage": {"data_dir": "./data", "retention_days": 30, "database_url": None, "schema_prefix": None,
+                "key_file": None, "tenant": "default"},
+    "privacy": {"mask_pii": True},
     "options_dir": None,
 }
 

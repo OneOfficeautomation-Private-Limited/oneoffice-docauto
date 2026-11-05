@@ -114,12 +114,19 @@ class TesseractProvider(OcrProvider):
         import pypdfium2 as pdfium
         import pytesseract
 
+        from docauto.preprocess import PDFIUM_LOCK
+
         lang = self._check_langs(languages)
-        out = pdfium.PdfDocument.new()
-        for img in images:
-            part = pytesseract.image_to_pdf_or_hocr(img, lang=lang, extension="pdf")
-            src = pdfium.PdfDocument(part)
-            out.import_pages(src)
-        buf = io.BytesIO()
-        out.save(buf)
+        parts = [pytesseract.image_to_pdf_or_hocr(img, lang=lang, extension="pdf") for img in images]
+        with PDFIUM_LOCK:   # PDFium is not thread-safe
+            out = pdfium.PdfDocument.new()
+            try:
+                for part in parts:
+                    src = pdfium.PdfDocument(part)
+                    out.import_pages(src)
+                    src.close()
+                buf = io.BytesIO()
+                out.save(buf)
+            finally:
+                out.close()
         return buf.getvalue()

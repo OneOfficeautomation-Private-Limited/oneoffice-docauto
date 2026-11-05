@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-built ZATCA (Saudi) simplified tax invoice in UBL 2.1, shaped like the ZATCA SDK samples.
+     Synthetic data: the signature block is shortened and the QR is a plain phase-1 TLV. -->
+<Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
+         xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+         xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2"
+         xmlns:ext="urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2">
+  <ext:UBLExtensions>
+    <ext:UBLExtension>
+      <ext:ExtensionURI>urn:oasis:names:specification:ubl:dsig:enveloped:xades</ext:ExtensionURI>
+      <ext:ExtensionContent/>
+    </ext:UBLExtension>
+  </ext:UBLExtensions>
+  <cbc:ProfileID>reporting:1.0</cbc:ProfileID>
+  <cbc:ID>INV-2026-0042</cbc:ID>
+  <cbc:UUID>3cf5ee18-ee25-44ea-a444-2c37ba7f28be</cbc:UUID>
+  <cbc:IssueDate>2026-10-15</cbc:IssueDate>
+  <cbc:IssueTime>10:30:00</cbc:IssueTime>
+  <cbc:InvoiceTypeCode name="0100000">388</cbc:InvoiceTypeCode>
+  <cbc:DocumentCurrencyCode>SAR</cbc:DocumentCurrencyCode>
+  <cbc:TaxCurrencyCode>SAR</cbc:TaxCurrencyCode>
+  <cac:OrderReference>
+    <cbc:ID>PO-7781</cbc:ID>
+  </cac:OrderReference>
+  <cac:AdditionalDocumentReference>
+    <cbc:ID>ICV</cbc:ID>
+    <cbc:UUID>42</cbc:UUID>
+  </cac:AdditionalDocumentReference>
+  <cac:AdditionalDocumentReference>
+    <cbc:ID>QR</cbc:ID>
+    <cac:Attachment>
+      <cbc:EmbeddedDocumentBinaryObject mimeCode="text/plain">ARRBQ01FIFRyYWRpbmcgQ28uIExMQwIPMzAwMTIzNDU2NzAwMDAzAxQyMDI2LTEwLTE1VDEwOjMwOjAwWgQIMTE1MDAuMDAFBzE1MDAuMDA=</cbc:EmbeddedDocumentBinaryObject>
+    </cac:Attachment>
+  </cac:AdditionalDocumentReference>
+  <cac:AccountingSupplierParty>
+    <cac:Party>
+      <cac:PartyIdentification>
+        <cbc:ID schemeID="CRN">1010010000</cbc:ID>
+      </cac:PartyIdentification>
+      <cac:PostalAddress>
+        <cbc:StreetName>King Fahd Road</cbc:StreetName>
+        <cbc:BuildingNumber>1234</cbc:BuildingNumber>
+        <cbc:CityName>Riyadh</cbc:CityName>
+        <cbc:PostalZone>12345</cbc:PostalZone>
+        <cac:Country>
+          <cbc:IdentificationCode>SA</cbc:IdentificationCode>
+        </cac:Country>
+      </cac:PostalAddress>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>300123456700003</cbc:CompanyID>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName>ACME Trading Co. LLC</cbc:RegistrationName>
+      </cac:PartyLegalEntity>
+    </cac:Party>
+  </cac:AccountingSupplierParty>
+  <cac:AccountingCustomerParty>
+    <cac:Party>
+      <cac:PostalAddress>
+        <cbc:CityName>Jeddah</cbc:CityName>
+        <cac:Country>
+          <cbc:IdentificationCode>SA</cbc:IdentificationCode>
+        </cac:Country>
+      </cac:PostalAddress>
+      <cac:PartyTaxScheme>
+        <cbc:CompanyID>310987654300003</cbc:CompanyID>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:PartyTaxScheme>
+      <cac:PartyLegalEntity>
+        <cbc:RegistrationName>Oneoffice Automation</cbc:RegistrationName>
+      </cac:PartyLegalEntity>
+    </cac:Party>
+  </cac:AccountingCustomerParty>
+  <cac:PaymentMeans>
+    <cbc:PaymentMeansCode>30</cbc:PaymentMeansCode>
+  </cac:PaymentMeans>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="SAR">1500.00</cbc:TaxAmount>
+  </cac:TaxTotal>
+  <cac:TaxTotal>
+    <cbc:TaxAmount currencyID="SAR">1500.00</cbc:TaxAmount>
+    <cac:TaxSubtotal>
+      <cbc:TaxableAmount currencyID="SAR">10000.00</cbc:TaxableAmount>
+      <cbc:TaxAmount currencyID="SAR">1500.00</cbc:TaxAmount>
+      <cac:TaxCategory>
+        <cbc:ID>S</cbc:ID>
+        <cbc:Percent>15.00</cbc:Percent>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:TaxCategory>
+    </cac:TaxSubtotal>
+  </cac:TaxTotal>
+  <cac:LegalMonetaryTotal>
+    <cbc:LineExtensionAmount currencyID="SAR">10000.00</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="SAR">10000.00</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="SAR">11500.00</cbc:TaxInclusiveAmount>
+    <cbc:AllowanceTotalAmount currencyID="SAR">0.00</cbc:AllowanceTotalAmount>
+    <cbc:PrepaidAmount currencyID="SAR">0.00</cbc:PrepaidAmount>
+    <cbc:PayableAmount currencyID="SAR">11500.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:InvoiceLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="PCE">2.000000</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="SAR">8000.00</cbc:LineExtensionAmount>
+    <cac:TaxTotal>
+      <cbc:TaxAmount currencyID="SAR">1200.00</cbc:TaxAmount>
+      <cbc:RoundingAmount currencyID="SAR">9200.00</cbc:RoundingAmount>
+    </cac:TaxTotal>
+    <cac:Item>
+      <cbc:Name>RPA licence</cbc:Name>
+      <cac:ClassifiedTaxCategory>
+        <cbc:ID>S</cbc:ID>
+        <cbc:Percent>15.00</cbc:Percent>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:ClassifiedTaxCategory>
+    </cac:Item>
+    <cac:Price>
+      <cbc:PriceAmount currencyID="SAR">4000.00</cbc:PriceAmount>
+    </cac:Price>
+  </cac:InvoiceLine>
+  <cac:InvoiceLine>
+    <cbc:ID>2</cbc:ID>
+    <cbc:InvoicedQuantity unitCode="PCE">1.000000</cbc:InvoicedQuantity>
+    <cbc:LineExtensionAmount currencyID="SAR">2000.00</cbc:LineExtensionAmount>
+    <cac:TaxTotal>
+      <cbc:TaxAmount currencyID="SAR">300.00</cbc:TaxAmount>
+      <cbc:RoundingAmount currencyID="SAR">2300.00</cbc:RoundingAmount>
+    </cac:TaxTotal>
+    <cac:Item>
+      <cbc:Name>Support plan</cbc:Name>
+      <cac:ClassifiedTaxCategory>
+        <cbc:ID>S</cbc:ID>
+        <cbc:Percent>15.00</cbc:Percent>
+        <cac:TaxScheme>
+          <cbc:ID>VAT</cbc:ID>
+        </cac:TaxScheme>
+      </cac:ClassifiedTaxCategory>
+    </cac:Item>
+    <cac:Price>
+      <cbc:PriceAmount currencyID="SAR">2000.00</cbc:PriceAmount>
+    </cac:Price>
+  </cac:InvoiceLine>
+</Invoice>

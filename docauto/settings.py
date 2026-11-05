@@ -28,6 +28,9 @@ DEPLOYMENT = [
     {"key": "DOCAUTO_PLATFORM_URL", "label": "Command Center address", "type": "text", "default": "",
      "placeholder": "http://127.0.0.1:8720",
      "help": "Where \"Start a bot\" deliveries start their bot. In SaaS, {tenant} is replaced by the tenant."},
+    {"key": "DOCAUTO_RETENTION_DAYS", "label": "Keep documents for (days)", "type": "number", "default": "30",
+     "help": "Documents (files, results) older than this are deleted every day. 0 = keep forever. Documents still "
+             "waiting for review and test-set documents are kept."},
 ]
 DEFAULTS = [
     {"key": "DOCAUTO_DEFAULT_SCREEN_OCR", "label": "Screen OCR engine", "type": "engine", "kind": "ocr", "default": "tesseract"},
@@ -45,6 +48,10 @@ DEFAULTS = [
     {"key": "DOCAUTO_FIELD_THRESHOLD", "label": "Field review threshold (0-1)", "type": "number", "default": "0.85",
      "help": "Fields below this confidence go to the Validation Station."},
     {"key": "DOCAUTO_DOC_THRESHOLD", "label": "Document review threshold (0-1)", "type": "number", "default": "0.80"},
+    {"key": "DOCAUTO_MASK_PII", "label": "Mask personal data before cloud AI", "type": "bool", "default": "true",
+     "help": "National ID / Iqama numbers, IBANs, phone numbers and e-mails are replaced by placeholders before text "
+             "goes to a cloud AI model, and restored in the results. Page images cannot be masked: with this on they "
+             "are only sent when a process allows images. Local engines are never masked."},
 ]
 PACKS = {
     "tier1_opensource": {"key": "DOCAUTO_PACK_OPENSOURCE", "title": "OneCore · Open source",
@@ -94,8 +101,11 @@ ENGINES: dict[str, dict[str, Any]] = {
     "claude": {"fields": [
         {"key": "CLAUDE_API_KEY", "label": "Anthropic API key", "type": "secret", "default": ""},
         {"key": "CLAUDE_MODEL", "label": "Model", "type": "select",
-         "options": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "default": "claude-opus-5-5",
-         "help": "Opus 5.5: most accurate. Sonnet 5.5: the plan's mid-tier, about half the cost. Haiku 5.5: cheapest."},
+         "options": ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"], "default": "claude-haiku-5-5",
+         "help": "Haiku 5.5: cheapest, the default. Sonnet 5.5: mid-tier. Opus 5.5: most accurate, most expensive."},
+        {"key": "CLAUDE_ESCALATION_MODEL", "label": "Escalation model", "type": "select",
+         "options": ["claude-sonnet-5-5", "claude-opus-5-5", "none"], "default": "claude-sonnet-5-5",
+         "help": "Re-reads a document whose fields would go to review, and keeps the better result. none = off."},
         {"key": "CLAUDE_REGION", "label": "Processing region", "type": "text", "default": "",
          "help": "Used by the residency policy."},
         {"key": "CLAUDE_SEND_IMAGES", "label": "Send page images (better on scans)", "type": "bool", "default": "true"}],

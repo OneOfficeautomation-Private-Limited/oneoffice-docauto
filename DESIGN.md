@@ -117,7 +117,8 @@ A connector that is enabled but not configured (missing key, SDK not installed) 
 │  pipeline.py     digitize → classify → extract → score → save    │
 │  extraction.py   built-in rules extractor + safe rule evaluator  │
 │  scoring.py      field checks, cross-field rules, review decision│
-│  store.py        SQLite: jobs, documents, schemas, usage meter   │
+│  store.py        PostgreSQL (schema per tenant): jobs, documents,│
+│                  schemas, usage, outbox, test sets (section 12)  │
 │  api/app.py      REST API (screens: OOA Command Center)          │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -147,6 +148,17 @@ An explicit request for a forbidden engine returns `403 POLICY_DENIED`. Data nev
 - The prompt gives the model OCR lines tagged with ids (`[p1.l3] ...`), and the model must cite them.
 - Values that cannot be found in the OCR text get confidence halved and the error *"value not found in OCR text (possible hallucination)"*, which forces review.
 - JSON mode, one automatic repair retry, and typed coercion (dates → ISO, amounts → numbers, Arabic-Indic digits supported).
+- **Grounding** (`grounding.py`, every engine): after extraction each value is looked up in the page words, with
+  Arabic-Indic digits and separators, thousands/decimal styles, spacing, case and date formats normalised and small OCR
+  slips tolerated. A value that is found gets its page and the box of the matched words (`grounded: true`,
+  `groundedBy: "ocr"`) so the review screen can highlight it; table rows and cells get their own boxes (`rowLocations`).
+  AI values that are not found keep the hallucination guard above; AI values the guard flagged only because of
+  formatting (a date printed 15/10/2026) get their confidence back.
+- **Claude** (`options/tier3_ai/claude`): Haiku 5.5 by default, with Sonnet 5.5 as escalation model: a document whose
+  extraction would go to review is read again with the escalation model and the better result is kept (fewer fields
+  to review, then higher confidence). Both readings are metered; provenance and usage record the model of each and which
+  one was kept. Requests carry only parameters the model accepts (no sampling parameters, prefill or thinking budget;
+  no server-side refusal fallback on Haiku).
 
 ---
 
@@ -184,12 +196,12 @@ An explicit request for a forbidden engine returns `403 POLICY_DENIED`. Data nev
    its vault (Settings > Document Automation: `docflow_url`, `docflow_token_ref`; in SaaS the region's `OOA_DOCFLOW_URL` /
    `OOA_DOCFLOW_TOKEN`) and forwards `/api/docflow/*` here with `X-OOA-Tenant` and `X-OOA-User`.
 3. Load `integration/action-package.json` into the action/package registry; implement the generic "REST-backed action" runner once.
-4. Tenants (`docauto/tenants.py`): each `X-OOA-Tenant` gets its own database and files under `<data_dir>/tenants/<tenant>` and
+4. Tenants (`docauto/tenants.py`): each `X-OOA-Tenant` gets its own PostgreSQL schema (`docflow_<tenant>`) and files under `<data_dir>/tenants/<tenant>` and
    its own routing settings (cloud opt-in, retry chain, thresholds); engine keys and the profile stay server-wide. Without
    the header a request belongs to `default`, the single-client install that keeps the base data folder.
 5. Reviews: the Command Center turns documents waiting for review into Task inbox tasks that open its review screen.
 6. Map `config/document-service.yaml` into the admin console (profile, option packs, engine keys, thresholds).
-7. Optionally swap `store.py` (SQLite) for the platform database.
+7. Point `DOCAUTO_DATABASE_URL` at the platform's PostgreSQL (one schema per tenant), or keep the embedded server (§12).
 
 ---
 
@@ -266,7 +278,27 @@ One View (KPIs, flows, activity) · One Inbox · OneFlow (list + six-stage build
 
 ### 9.5 API (base `/api/docs/v1/df`)
 
-`GET /library` · `GET|POST /doctypes` · `GET|PUT|DELETE /doctypes/{id}` · `POST /doctypes/suggest` · `GET /doctypes/{id}/learning` · `GET|POST /flows` · `GET|PUT|DELETE /flows/{id}` · `POST /flows/{id}/live?live=true|false` · `POST|GET /flows/{id}/documents` · `GET /flows/{id}/stats|export|deliveries` · `POST /flows/{id}/deliveries/{d}/test` · `POST /flows/{id}/intake/scan` · `GET /documents/{id}` · `POST /documents/{id}/review|reclassify` · `GET /review` · `GET /review/next` · `GET /overview` · `GET|POST /reftables` · `GET|DELETE /reftables/{id}`
+`GET /library` · `GET|POST /doctypes` · `GET|PUT|DELETE /doctypes/{id}` · `POST /doctypes/suggest` · `GET /doctypes/{id}/learning` · `GET|POST /flows` · `GET|PUT|DELETE /flows/{id}` · `POST /flows/{id}/live?live=true|false` · `POST|GET /flows/{id}/documents` · `GET /flows/{id}/stats|export|deliveries` · `POST /flows/{id}/deliveries/{d}/test` · `POST /flows/{id}/intake/scan` · `GET /documents/{id}` · `POST /documents/{id}/review|reclassify` · `GET /review` · `GET /review/next` · `GET /overview` · `GET|POST /reftables` · `GET|DELETE /reftables/{id}` · `GET /outbox` · `GET|POST /testsets` · `POST /testsets/seed` · `GET|PUT|DELETE /testsets/{id}` · `POST /testsets/{id}/documents|items` · `PUT|DELETE /testsets/{id}/items/{item}` · `GET /testsets/{id}/items/{item}/file` · `GET|POST /testsets/{id}/runs` · `GET /testsets/{id}/runs/{run}` (§12.7)
+
+### 9.5.1 Settings and results added in November 2026
+
+- **Per-field review thresholds:** `review.fieldThresholds: {field: 0-1}` on a process overrides the process-wide
+  `review.fieldConfidence` for those fields (and the document type's own `confidenceThreshold`). Values outside 0-1 are
+  refused (400).
+- **E-invoices first:** `intake.einvoiceFirst` (default true; only acts when e-invoice data is found):
+  - A UBL 2.1 XML (ZATCA) uploaded on its own, or embedded in a PDF/A-3, fills the invoice fields with confidence 1.0
+    (source `einvoice-xml`) without OCR. A PDF still has its pages rendered for review (and its text layer read, free).
+    In the One Inbox an e-invoice goes straight to the Invoice type. Only UBL is read (not Factur-X/ZUGFeRD CII).
+  - A ZATCA QR code (TLV tags 1-5) or an India GST e-invoice QR (signed JWT; payload read without checking the
+    signature) on the first pages, read with OpenCV, cross-checks the extracted fields: agreeing values are confirmed,
+    a different value sends the document to review ("QR code says total 1,150.00; page reads 1,510.00"), a missing
+    value is filled from the QR. A GSTIN fills `supplier_gstin` / `customer_gstin` when the type has them, else the VAT
+    fields. The result keeps what was read and each check in `einvoice`.
+- **Barcodes:** the `barcodes` capability is served by the core's OpenCV QR reader (`Page.barcodes`), so no OCR engine
+  has to offer it.
+- **Where values are:** `GET /df/documents/{id}` and `GET /documents/{id}/fields` add `locations`
+  (`{field: {page, bbox, grounded, groundedBy, rows?}}`); `GET /documents/{id}/result` has `page`, `bbox`, `grounded`,
+  `groundedBy` and `rowLocations` on each field. Boxes are 0-1 of the page, origin top-left, as the page image is shown.
 
 ### 9.6 Bot package "DocFlow"
 
@@ -275,6 +307,16 @@ One View (KPIs, flows, activity) · One Inbox · OneFlow (list + six-stage build
 Learning instances from v2 are migrated automatically on first start, each becoming a doc type plus a flow.
 
 ---
+
+### 9.7 Document events to the OOA Command Center
+
+When a document in a process reaches a state, DocFlow posts `{event, event_id, document_id, process_id, process,
+status, file_name, doc_type, fields (scalar), at}` to `{DOCAUTO_PLATFORM_URL}/api/docflow-callback/events`, with the
+same service token as "Start a bot" deliveries and `X-OOA-Tenant`. Events: `processed` (finished, no review needed),
+`needs_review`, `approved` / `rejected` (after a review decision), `delivery_failed` (after the delivery's last
+retry), `review_overdue` (SLA check). `event_id` is a UUID per event (the same on every retry of it). Events go
+through the durable outbox (§12.3): queued in the transaction of the status change, sent with retries, marked sent
+once, never sent again after delivery. Nothing is queued when `DOCAUTO_PLATFORM_URL` is unset.
 
 ## 10. OneOffice brand and "One" naming (v3.1)
 
@@ -322,4 +364,100 @@ The component is kept in a public GitHub repository (`OneOfficeautomation-Privat
 - **Installer:** `windows/Install-OneOffice-DocFlow.bat` (downloadable from Settings > Updates & install with the repository filled in, and attached to each GitHub release). It fetches `windows/get-docflow.ps1` through the GitHub API anonymously. A token is optional: it lifts GitHub's anonymous rate limit, or gives access to a private copy, and is stored per Windows user with DPAPI.
 - **Updater:** `get-docflow.ps1` checks the latest commit/release, stops the service, backs up code + database to `backups/` (last 5), mirrors code folders, keeps `config/local.env`, `data/`, `tessdata/`, `.venv/`, reinstalls packages only when `requirements.txt` changed, restarts. A git working copy is updated with `git pull`. Channel via `DOCFLOW_REF`: `main`, `release`, or a tag.
 - **UI/API:** `GET /api/docs/v1/admin/version`, `POST /admin/update` (Windows: opens the updater window), `GET /admin/installer.bat`.
-- **CI:** Linux tests + a real install on a clean Windows runner through the same installer; tag `vX.Y.Z` (matching `VERSION`) publishes a release.
+- **CI:** Linux tests (on a PostgreSQL service) + a real install on a clean Windows runner through the same installer (embedded PostgreSQL); tag `vX.Y.Z` (matching `VERSION`) publishes a release.
+
+---
+
+## 12. Storage and production hardening (v4)
+
+### 12.1 PostgreSQL only
+
+DocFlow keeps its data in PostgreSQL (`docauto/db.py`, `docauto/store.py`, psycopg 3):
+
+- `DOCAUTO_DATABASE_URL` set: that server (PostgreSQL 13+, UTF8; the service refuses another encoding).
+- not set: an **embedded PostgreSQL 16** (the `pgserver` package) runs from `<data dir>/postgres`, database `docflow`
+  (UTF8, C collation so text sorts byte-wise as before). It starts with the first DocFlow process and stops with the
+  last one, so a plain install needs no set-up.
+- **One schema per tenant**, the default tenant included: `docflow_default`, `docflow_<tenant>` (created on first use,
+  tables created idempotently under an advisory lock). Isolation is unchanged: a tenant's service only ever sets its
+  own `search_path`; files stay under `<data dir>/tenants/<tenant>`.
+- Connections come from a thread-safe pool per server (`DOCAUTO_DB_POOL_SIZE`, default 20). Statements commit on their
+  own; `Store.tx()` groups what one thread does into one transaction (nested blocks are savepoints). There is no
+  global lock any more.
+- Every table and query was ported (documents, jobs, results, usage, schemas, instances, corrections, `df_*`,
+  dedupe, reference tables, delivery log); API output is unchanged (checked on a copy of the e2e data: 20 read paths
+  compared between the SQLite and the PostgreSQL store, no difference). `?` placeholders stay in the SQL and are
+  translated for psycopg.
+- PDFium (pypdfium2) is not thread-safe: every use holds `preprocess.PDFIUM_LOCK`, since several jobs now run at once.
+
+**Migration:** `python -m docauto.migrate_sqlite <data dir>` copies `data/docauto.db` and every
+`data/tenants/<id>/docauto.db` into the tenant schemas of the database the service will use, one transaction per
+tenant, recorded in the tenant's `meta` table, so a second run changes nothing. Files stay where they are; the SQLite
+files are not changed. `windows/start.ps1` runs it with `--if-needed` before starting (skipped once
+`data/docauto.db.migrated` exists). **Backup:** `python -m docauto.backup <data dir> <file.dump>` (pg_dump; the
+updater runs it before every update).
+
+### 12.2 Durable jobs
+
+A job is a row (`jobs`). `submit(wait=false)` queues it; worker threads (`workers`, default 4, per tenant service and
+per process) claim jobs with `UPDATE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)`, so several processes or
+threads can share one database without taking the same job. A running job carries its worker id and a heartbeat
+(every 15 s). On start the workers resume jobs left `queued`, and take over `running` jobs whose worker is gone: a
+stopped process of the same host at once (its PID no longer exists), another host's after
+`DOCAUTO_JOB_STALE_SECONDS` (default 90) without a heartbeat. A job interrupted 3 times fails with `INTERRUPTED`.
+`wait=true` jobs run in the caller's thread, claimed when created. The job request (its options) is stored with the
+job, so a resumed job runs exactly as asked; usage of an interrupted attempt stays metered.
+
+### 12.3 Outbox for deliveries and events
+
+`docauto/outbox.py`. When a document's status changes, the job update, the status and everything the listeners queue
+(Command Center events, the process's deliveries: webhook, folder, excel, start_bot) are written in **one
+transaction** (`outbox` table). A background sender per tenant leases due items (`FOR UPDATE SKIP LOCKED`, lease 5
+min), sends each, then marks it `sent` once (a delivered item is never sent again), or retries after
+`DOCAUTO_OUTBOX_BACKOFF` x 2^(attempt-1) seconds (default 10 s, at most 15 min apart) up to
+`DOCAUTO_OUTBOX_MAX_ATTEMPTS` (default 10, about 1 h 20 min in all), or fails at once when the receiver refused it
+(4xx other than 408/429). After the final failure the delivery log gets one failed row and the Command Center a
+`delivery_failed` event (queued in the same transaction). The delivery body is taken when queued. Items survive
+restarts; a send cut off by a crash may be repeated after the lease (at-least-once for the receiver). "Test" on a
+delivery still sends once, directly. `GET /df/outbox?status=pending|sent|failed` lists them.
+
+### 12.4 Encryption at rest
+
+Stored originals (and test-set copies) are encrypted with Fernet (`docauto/filecrypt.py`; AES-128-CBC + HMAC).
+Key: `DOCAUTO_FILE_KEY` (comma-separated keys rotate: the first encrypts, all decrypt); without it a key is generated
+on first start into `<data dir>/file.key` (logged; back it up with the data, or move it to the variable). Encrypted
+files start with a header; files written before have none and are read as they are, so nothing has to be converted.
+Page images are rendered from the original when asked and never written to disk. Files written by a "folder"
+delivery are the customer's output and stay plain.
+
+### 12.5 Retention
+
+`storage.retention_days` (`DOCAUTO_RETENTION_DAYS`, default 30; 0 = keep forever) is enforced once a day per tenant
+(housekeeping thread; last run kept in `meta`): documents created before the cutoff are deleted with their results,
+jobs, dedupe keys, corrections, outbox items and files. Kept: documents still in work (`queued`, `processing`,
+`validation`), test-set items (stored apart) and usage rows (billing). Sent or failed outbox items older than the
+cutoff go too.
+
+### 12.6 PII masking before cloud models
+
+`docauto/pii.py`. Before an AI engine that runs off the machine (tier 3 with `runsLocally: false`: Claude, llm-cloud)
+gets a document, Saudi national ID (1xxxxxxxxx) / Iqama (2xxxxxxxxx) numbers, IBANs (valid checksum, or SA + 22),
+phone numbers (+966 / 00966 / 05x / 01x and international) and e-mails in the OCR text (and in the reviewer-correction
+hints) are replaced by placeholders (`[IBAN_1]`); the map stays in memory and returned values are restored (and typed
+again). Classification and "Teach from samples" are masked too. Settings: `DOCAUTO_MASK_PII` (tenant-level, default
+true), per process `engine.maskPii` (null = the setting) and per request `maskPii`. **Images cannot be masked:** while
+masking is on, cloud models get no page images unless the process sets `engine.allowImages` (request: `cloudImages`).
+Local engines (`llm-local`, rules) are never masked.
+
+### 12.7 Test sets (quality gate)
+
+`docauto/testsets.py`, API under `/api/docs/v1/df/testsets`. A test set belongs to a document type and holds documents
+with their expected values: reviewed (validated) documents added from a process (file copied, the approved scalar
+values as ground truth), uploaded files with expected values, or the synthetic seed set (`POST /testsets/seed`:
+`samples/make_benchmark_set.py` invoices in clean, scan, fax, PDF and Arabic/English bilingual variants). A run
+evaluates engine combinations (OCR x extraction, e.g. `auto x builtin-rules`, `tesseract x claude`) over the set with
+the benchmark's scoring (`docauto/benchmark.py`), each engine exactly as asked (no fallback), optionally with a
+process's thresholds and privacy settings (`flowId`). Per combination: per-field accuracy, straight-through rate,
+documents wrongly auto-approved, review rate, errors, credits and list-price cost (`docauto/costs.py`), seconds per
+page and p95. Runs are stored (`testset_runs`) and can be listed later. Run documents are not kept (as in the Test
+lab); their usage is metered.

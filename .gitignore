@@ -13,3 +13,6 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+# DocFlow v4: database backups, file encryption keys (normally inside data/)
+*.dump
+file.key

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import io
 import mimetypes
+import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -14,6 +15,8 @@ from .errors import InvalidInput
 
 RENDER_DPI = 300
 MAX_PAGES = 500
+# PDFium (pypdfium2) is not thread-safe: every use in DocFlow holds this lock (several jobs run at once)
+PDFIUM_LOCK = threading.RLock()
 
 
 @dataclass
@@ -40,6 +43,9 @@ def sniff_mime(data: bytes, file_name: str = "") -> str:
         return "image/bmp"
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
+    head = data[:64].lstrip(b"\xef\xbb\xbf \t\r\n")
+    if head.startswith(b"<?xml") or (head.startswith(b"<") and file_name.lower().endswith(".xml")):
+        return "application/xml"   # e-invoices (docauto.einvoice); OCR does not read XML
     guess, _ = mimetypes.guess_type(file_name)
     return guess or "application/octet-stream"
 
@@ -47,19 +53,23 @@ def sniff_mime(data: bytes, file_name: str = "") -> str:
 def _pdf_pages(data: bytes, pages: Optional[list[int]]) -> tuple[list[Image.Image], list[int]]:
     import pypdfium2 as pdfium
 
-    pdf = pdfium.PdfDocument(data)
-    n = len(pdf)
-    if n > MAX_PAGES:
-        raise InvalidInput(f"PDF has {n} pages, limit is {MAX_PAGES}")
-    wanted = [p for p in (pages or range(1, n + 1)) if 1 <= p <= n]
-    images, native = [], []
-    for pno in wanted:
-        page = pdf[pno - 1]
-        text = page.get_textpage().get_text_range() or ""
-        if len(text.strip()) >= 20:
-            native.append(pno)
-        images.append(page.render(scale=RENDER_DPI / 72).to_pil().convert("RGB"))
-    return images, native
+    with PDFIUM_LOCK:
+        pdf = pdfium.PdfDocument(data)
+        try:
+            n = len(pdf)
+            if n > MAX_PAGES:
+                raise InvalidInput(f"PDF has {n} pages, limit is {MAX_PAGES}")
+            wanted = [p for p in (pages or range(1, n + 1)) if 1 <= p <= n]
+            images, native = [], []
+            for pno in wanted:
+                page = pdf[pno - 1]
+                text = page.get_textpage().get_text_range() or ""
+                if len(text.strip()) >= 20:
+                    native.append(pno)
+                images.append(page.render(scale=RENDER_DPI / 72).to_pil().convert("RGB"))
+            return images, native
+        finally:
+            pdf.close()
 
 
 def _raster_pages(data: bytes) -> list[Image.Image]:

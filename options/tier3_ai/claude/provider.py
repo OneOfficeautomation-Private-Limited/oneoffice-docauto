@@ -7,7 +7,13 @@ must cite OCR line ids); on top of that:
 * structured outputs: the reply must match a JSON schema built from the field list,
 * page images go with the OCR text (better on scans and phone photos),
 * refusal fallbacks ("default"): a declined request is re-run server-side on the
-  model Anthropic recommends for that case instead of failing.
+  model Anthropic recommends for that case instead of failing (not on Haiku, which has none),
+* a cheap default model (Haiku 5.5) with an escalation model (Sonnet 5.5): the pipeline re-reads a
+  document whose extraction would go to review with escalationModel and keeps the better result.
+
+Only parameters the chosen model accepts are sent (request_params): no sampling parameters
+(temperature, top_p, top_k), no assistant prefill and no thinking budget, which Haiku 5.5, Sonnet 5.5
+and Opus 5.5 reject with a 400; thinking is adaptive and steered with output_config.effort.
 """
 from __future__ import annotations
 
@@ -38,6 +44,10 @@ def _load_shared():
 
 _llm = _load_shared()
 FALLBACK_BETA = "server-side-fallback-2026-07-01"   # pairs with fallbacks="default"
+DEFAULT_MODEL = "claude-haiku-5-5"
+DEFAULT_ESCALATION = "claude-sonnet-5-5"
+NO_SERVER_FALLBACK = ("claude-haiku-",)   # Haiku has no server-side refusal fallback (a fallback list is a 400)
+NO_EFFORT = ("claude-haiku-4-5",)         # older Haiku: no effort parameter
 _SCALAR = {"number": {"type": "number"}, "currency": {"type": "number"}, "boolean": {"type": "boolean"}}
 
 
@@ -70,11 +80,24 @@ def response_schema(schema: FieldSchema) -> dict:
             "required": ["fields"], "additionalProperties": False}
 
 
+def request_params(model: str, effort: str, out_schema: dict, fallbacks) -> dict:
+    """The model-specific part of a Messages request: only what that model accepts."""
+    out_cfg: dict = {"format": {"type": "json_schema", "schema": out_schema}}
+    if effort and not model.startswith(NO_EFFORT):
+        out_cfg["effort"] = effort
+    params: dict = {"model": model, "output_config": out_cfg}
+    if fallbacks and not model.startswith(NO_SERVER_FALLBACK):
+        params.update(betas=[FALLBACK_BETA], extra_body={"fallbacks": fallbacks})
+    return params
+
+
 class ClaudeExtractionProvider(ExtractionProvider):
     def init(self, ctx):
         super().init(ctx)
         cfg = ctx.config
-        self.model = cfg.get("model") or "claude-opus-5-5"
+        self.model = cfg.get("model") or DEFAULT_MODEL
+        # re-reads low-confidence documents with this model (empty / "none" = off)
+        self.escalation_model = cfg.get("escalationModel", DEFAULT_ESCALATION) or None
         self.effort = cfg.get("effort") or "medium"
         self.api_key = ctx.credentials.get("apiKey") or ""
         self.send_images = bool(cfg.get("sendImages", True))
@@ -113,14 +136,12 @@ class ClaudeExtractionProvider(ExtractionProvider):
                 return ProviderError(f"HTTP {e.status_code}: {e}", pid)
         return ProviderError(f"{type(e).__name__}: {e}", pid)
 
-    def _call(self, content: list, out_schema: dict, max_tokens: int) -> str:
-        kwargs = dict(model=self.model, max_tokens=max_tokens, system=_llm.SYSTEM_PROMPT,
-                      output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": out_schema}},
-                      messages=[{"role": "user", "content": content}])
+    def _call(self, content: list, out_schema: dict, max_tokens: int, model: str | None = None) -> str:
+        kwargs = dict(max_tokens=max_tokens, system=_llm.SYSTEM_PROMPT, messages=[{"role": "user", "content": content}],
+                      **request_params(model or self.model, self.effort, out_schema, self.fallbacks))
         try:
-            if self.fallbacks:
-                r = self.client().beta.messages.create(betas=[FALLBACK_BETA], extra_body={"fallbacks": self.fallbacks},
-                                                       **kwargs)
+            if "betas" in kwargs:
+                r = self.client().beta.messages.create(**kwargs)
             else:
                 r = self.client().messages.create(**kwargs)
         except Exception as e:
@@ -152,7 +173,7 @@ class ClaudeExtractionProvider(ExtractionProvider):
         prompt, index = _llm.build_prompt(req.document, req.schema)
         if req.instructions:
             prompt = req.instructions + "\n\n" + prompt
-        text = self._call(self._content(prompt, req.images), response_schema(req.schema), self.max_tokens)
+        text = self._call(self._content(prompt, req.images), response_schema(req.schema), self.max_tokens, req.model)
         try:
             return _llm.parse_llm_fields(text, req.schema, index, req.document, self.info.id)
         except (ValueError, json.JSONDecodeError) as e:

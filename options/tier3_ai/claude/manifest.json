@@ -14,6 +14,6 @@
   "credentialTypes": ["api_key"],
   "license": "Commercial (BYOK or resold)",
   "requires": {"python": ["anthropic"]},
-  "configSchema": {"model": "claude-opus-5-5 | claude-sonnet-5-5 | claude-haiku-5-5", "effort": "low | medium | high", "sendImages": true, "maxImages": 5, "region": "processing region for residency policy", "fallbacks": "default (refusal fallbacks) or empty to disable"},
+  "configSchema": {"model": "claude-haiku-5-5 (default) | claude-sonnet-5-5 | claude-opus-5-5", "escalationModel": "re-reads documents below the review threshold (default claude-sonnet-5-5; none = off)", "effort": "low | medium | high", "sendImages": true, "maxImages": 5, "region": "processing region for residency policy", "fallbacks": "default (refusal fallbacks) or empty to disable"},
   "notes": "Official Anthropic SDK. Replies are constrained to a JSON schema built from the document type, and every value must cite OCR lines (hallucination guard shared with llm-cloud)."
 }

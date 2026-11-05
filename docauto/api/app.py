@@ -47,10 +47,15 @@ def _service_for(tenant: str) -> DocumentService:
     return svc
 
 
-def _tenant_config(tenant: str, data_dir: str, options_dir: Optional[str]) -> dict:
+def _tenant_config(tenant: str, data_dir: str, options_dir: Optional[str], base: DocumentService) -> dict:
+    """A tenant's config: its own settings over the server's, its own data folder and database schema, on the
+    server's database (base: the default tenant's service) with the server's file key."""
     env = {**os.environ, **tenants.read_overrides(_base_data_dir(), tenant)}
     cfg = load_config(os.environ.get("DOCAUTO_CONFIG"), env=env)
-    cfg["storage"]["data_dir"] = data_dir
+    bst = base.config["storage"]
+    cfg["storage"].update(data_dir=data_dir, tenant=tenant, database_url=base.store.database_url,
+                          schema_prefix=bst.get("schema_prefix"),
+                          key_file=bst.get("key_file") or str(Path(bst["data_dir"]) / "file.key"))
     if options_dir:
         cfg["options_dir"] = options_dir
     return cfg
@@ -59,9 +64,9 @@ def _tenant_config(tenant: str, data_dir: str, options_dir: Optional[str]) -> di
 def _build_service(tenant: str) -> DocumentService:
     if tenant == tenants.DEFAULT:
         return DocumentService(config_path=os.environ.get("DOCAUTO_CONFIG"))
-    base = _service_for(tenants.DEFAULT).config
-    return DocumentService(_tenant_config(tenant, str(tenants.data_dir(base["storage"]["data_dir"], tenant)),
-                                          base.get("options_dir")))
+    base = _service_for(tenants.DEFAULT)
+    return DocumentService(_tenant_config(tenant, str(tenants.data_dir(base.config["storage"]["data_dir"], tenant)),
+                                          base.config.get("options_dir"), base))
 
 
 def _base_data_dir() -> str:
@@ -97,8 +102,11 @@ def _err(_, e: DocAutoError):
 @app.get("/health")
 def health():
     svc = service()
+    svc.store._one("SELECT 1 AS ok")       # the database answers
+    embedded = not (svc.config["storage"].get("database_url") or os.environ.get("DOCAUTO_DATABASE_URL"))
     return {"status": "ok", "profile": svc.policy.profile,
-            "enginesAvailable": [p.info.id for p in svc.registry.available()]}
+            "enginesAvailable": [p.info.id for p in svc.registry.available()],
+            "database": {"kind": "postgresql (embedded)" if embedded else "postgresql", "schema": svc.store.schema}}
 
 
 # ------------------------------------------------------------------ documents
@@ -143,9 +151,11 @@ def get_fields(doc_id: str, _: str = Depends(auth)):
     res = service().store.get_result(doc_id)
     if not res:
         raise HTTPException(404, "result not available")
+    from ..grounding import locations
     return {"documentId": doc_id, "reviewRequired": res.review.required, "reviewStatus": res.review.status,
             "fields": {f.name: f.value for f in res.fields},
-            "confidence": {f.name: f.confidence for f in res.fields}}
+            "confidence": {f.name: f.confidence for f in res.fields},
+            "locations": locations(res)}
 
 
 @app.get(f"{API}/documents/{{doc_id}}/file")
@@ -294,7 +304,8 @@ def reload_service() -> DocumentService:
     settings (the default tenant's) reach every tenant, so the other tenants are rebuilt too."""
     tenant = tenants.current.get()
     old = service()
-    cfg = _tenant_config(tenant, old.config["storage"]["data_dir"], old.config.get("options_dir"))
+    cfg = _tenant_config(tenant, old.config["storage"]["data_dir"], old.config.get("options_dir"),
+                         _service_for(tenants.DEFAULT))
     with _services_lock:
         if tenant == tenants.DEFAULT:
             for t in [t for t in _services if t != tenants.DEFAULT]:
@@ -346,7 +357,8 @@ def costs(pages: int = 10000, cloudShare: float = 0.2, extractShare: float = 0.3
     configured = costs_mod.claude_model(svc.config)
     opted_in = svc.policy.cloud_opt_in if optIn is None else optIn
     return {"prices": costs_mod.price_table(svc.config, [p.info.id for p in svc.registry.providers.values()]),
-            "claudeModel": configured, "cloudOptIn": svc.policy.cloud_opt_in,
+            "claudeModel": configured, "claudeEscalationModel": costs_mod.claude_escalation_model(svc.config),
+            "cloudOptIn": svc.policy.cloud_opt_in,
             "estimate": costs_mod.estimate(pages, cloudShare, extractShare, cloudOcr or None, extraction,
                                            model or configured, opted_in)}
 
@@ -474,22 +486,35 @@ def docflow() -> DocFlowService:
 
 
 def _drop(tenant: str) -> None:
-    """Forget a tenant's services (caller holds the lock); its DocFlow folder watcher stops."""
-    _services.pop(tenant, None)
+    """Forget a tenant's services (caller holds the lock): its DocFlow threads and job workers stop."""
+    svc = _services.pop(tenant, None)
     df = _dfs.pop(tenant, None)
     if df is not None:
         df.stop_watcher()
+    if svc is not None:
+        svc.close()
 
 
 @app.on_event("startup")
 def _start_docflow():
-    """DocFlow, with its folder watcher, for every tenant that has data."""
+    """DocFlow for every tenant that has data: folder watcher, outbox sender, housekeeping, and the job workers,
+    which resume jobs left queued or interrupted."""
     for tenant in [tenants.DEFAULT, *tenants.known(_base_data_dir())]:
         token = tenants.current.set(tenant)
         try:
             docflow()
+            service().start_workers()
         finally:
             tenants.current.reset(token)
+
+
+@app.on_event("shutdown")
+def _stop_docflow():
+    with _services_lock:
+        for df in list(_dfs.values()):
+            df.stop_watcher()
+        for svc in list(_services.values()):
+            svc.close()
 
 
 # ---- doc types
@@ -733,3 +758,127 @@ def df_ref_get(ref_id: str, limit: int = 100, _: str = Depends(auth)):
 def df_ref_delete(ref_id: str, _: str = Depends(auth)):
     service().store.ref_delete(ref_id)
     return {"deleted": ref_id}
+
+
+# ---- delivery / event outbox (operations)
+@app.get(f"{DF}/outbox")
+def df_outbox(status: Optional[str] = Query(None, pattern="^(pending|sent|failed)$"), limit: int = 100,
+              _: str = Depends(auth)):
+    """Deliveries and Command Center events waiting, sent or failed for good (attempts, next try, last error)."""
+    return docflow().outbox_status(status, min(max(limit, 1), 1000))
+
+
+# ---- test sets (quality gate per document type, docauto.testsets)
+class _TestSetCreate(BaseModel):
+    name: str
+    docType: str
+    description: str = ""
+
+
+class _TestSetUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class _TestSetDocument(BaseModel):
+    documentId: str
+    tags: list[str] = []
+
+
+class _TestSetItemUpdate(BaseModel):
+    expected: dict[str, Any]
+    tags: Optional[list[str]] = None
+
+
+class _Combo(BaseModel):
+    ocr: str = "auto"
+    extraction: str = "auto"
+
+
+class _TestSetRun(BaseModel):
+    combos: list[_Combo] = [_Combo()]
+    flowId: Optional[str] = None       # use this process's review thresholds and privacy settings
+
+
+@app.get(f"{DF}/testsets")
+def df_testsets(docType: Optional[str] = None, _: str = Depends(auth)):
+    return docflow().testsets.list(docType)
+
+
+@app.post(f"{DF}/testsets")
+def df_testset_create(body: _TestSetCreate, _: str = Depends(auth)):
+    return docflow().testsets.create(body.name, body.docType, body.description)
+
+
+@app.post(f"{DF}/testsets/seed")
+def df_testset_seed(count: int = Query(3, ge=1, le=20), bilingual: bool = True, _: str = Depends(auth)):
+    """The synthetic invoice set (no real data), created or topped up."""
+    return docflow().testsets.seed(count, bilingual)
+
+
+@app.get(f"{DF}/testsets/{{set_id}}")
+def df_testset(set_id: str, _: str = Depends(auth)):
+    return docflow().testsets.get(set_id)
+
+
+@app.put(f"{DF}/testsets/{{set_id}}")
+def df_testset_update(set_id: str, body: _TestSetUpdate, _: str = Depends(auth)):
+    return docflow().testsets.update(set_id, body.name, body.description)
+
+
+@app.delete(f"{DF}/testsets/{{set_id}}")
+def df_testset_delete(set_id: str, _: str = Depends(auth)):
+    docflow().testsets.delete(set_id)
+    return {"deleted": set_id}
+
+
+@app.post(f"{DF}/testsets/{{set_id}}/documents")
+def df_testset_add_document(set_id: str, body: _TestSetDocument, _: str = Depends(auth)):
+    """Add a reviewed document: its file and the values the reviewer approved become a test item."""
+    return docflow().testsets.add_document(set_id, body.documentId, body.tags or None)
+
+
+@app.post(f"{DF}/testsets/{{set_id}}/items")
+async def df_testset_add_file(set_id: str, file: UploadFile = File(...), expected: str = Form(...),
+                              tags: str = Form(""), _: str = Depends(auth)):
+    """Upload a document with its expected values: `expected` is JSON {field: value}, `tags` comma separated."""
+    try:
+        values = json.loads(expected)
+        assert isinstance(values, dict)
+    except Exception:
+        raise HTTPException(400, "expected must be a JSON object {field: value}")
+    return docflow().testsets.add_file(set_id, await file.read(), file.filename or "document", values,
+                                       [t.strip() for t in tags.split(",") if t.strip()])
+
+
+@app.put(f"{DF}/testsets/{{set_id}}/items/{{item_id}}")
+def df_testset_update_item(set_id: str, item_id: str, body: _TestSetItemUpdate, _: str = Depends(auth)):
+    return docflow().testsets.update_item(set_id, item_id, body.expected, body.tags)
+
+
+@app.delete(f"{DF}/testsets/{{set_id}}/items/{{item_id}}")
+def df_testset_delete_item(set_id: str, item_id: str, _: str = Depends(auth)):
+    docflow().testsets.delete_item(set_id, item_id)
+    return {"deleted": item_id}
+
+
+@app.get(f"{DF}/testsets/{{set_id}}/items/{{item_id}}/file")
+def df_testset_item_file(set_id: str, item_id: str, _: str = Depends(auth)):
+    data, name, mime = docflow().testsets.item_file(set_id, item_id)
+    return Response(data, media_type=mime, headers={"Content-Disposition": f'inline; filename="{name}"'})
+
+
+@app.post(f"{DF}/testsets/{{set_id}}/runs", status_code=202)
+def df_testset_run(set_id: str, body: _TestSetRun, wait: bool = Query(False), _: str = Depends(auth)):
+    """Evaluate engine combinations over the set (in the background; wait=true returns the finished run)."""
+    return docflow().testsets.start_run(set_id, [c.model_dump() for c in body.combos], body.flowId, wait)
+
+
+@app.get(f"{DF}/testsets/{{set_id}}/runs")
+def df_testset_runs(set_id: str, limit: int = 50, _: str = Depends(auth)):
+    return docflow().testsets.runs(set_id, min(max(limit, 1), 500))
+
+
+@app.get(f"{DF}/testsets/{{set_id}}/runs/{{run_id}}")
+def df_testset_run_detail(set_id: str, run_id: str, _: str = Depends(auth)):
+    return docflow().testsets.run_detail(set_id, run_id)

@@ -22,7 +22,6 @@ import csv
 import io
 import json
 import logging
-import os
 import re
 import shutil
 import threading
@@ -35,13 +34,15 @@ from typing import Any, Literal, Optional
 import httpx
 from pydantic import BaseModel, Field
 
+from . import einvoice, events, outbox, pii
 from .errors import DocAutoError, InvalidInput
 from .extraction import coerce, safe_eval
+from .grounding import locations
 from .models import DocumentResult, ExtractedField, FieldDef, FieldSchema, ReviewStatus
 from .pipeline import DocumentService, ProcessOptions
 
 log = logging.getLogger("docauto.docflow")
-SUPPORTED_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+SUPPORTED_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp", ".xml"}
 INBOX_ID = "smart-inbox"
 
 
@@ -106,6 +107,10 @@ class EngineChoice(BaseModel):
     ocrProvider: str = "auto"
     extractionProvider: str = "auto"
     capabilities: list[str] = Field(default_factory=lambda: ["ocr_printed"])
+    # cloud AI models: mask IDs, IBANs, phones and e-mails in the text (None = the server/tenant setting, on).
+    # Page images cannot be masked: with masking on they are only sent when allowImages is true.
+    maskPii: Optional[bool] = None
+    allowImages: bool = False
 
 
 class ClassifySettings(BaseModel):
@@ -117,6 +122,7 @@ class ClassifySettings(BaseModel):
 class ReviewSettings(BaseModel):
     fieldConfidence: float = 0.85
     documentConfidence: float = 0.80
+    fieldThresholds: dict[str, float] = Field(default_factory=dict)   # {field name: 0-1}, over fieldConfidence
     slaHours: float = 24
     slaWebhook: str = ""
 
@@ -145,6 +151,9 @@ class Intake(BaseModel):
     pollSeconds: int = 30
     # email inbox, read by the OOA Command Center (IMAP or Microsoft 365; secrets are its vault references)
     email: dict[str, Any] = Field(default_factory=dict)
+    # e-invoices first: a UBL XML (alone or inside a PDF/A-3) is read instead of OCR, and a ZATCA / India GST
+    # QR code on the page cross-checks the extracted fields. Only acts when such data is found.
+    einvoiceFirst: bool = True
 
 
 class Flow(BaseModel):
@@ -195,6 +204,7 @@ LIBRARY: dict[str, dict[str, Any]] = {
                     _f("supplier_vat", label="Supplier VAT No / الرقم الضريبي", aliases=["VAT Number", "VAT No", "TRN"],
                        regex=r"3\d{14}"),
                     _f("customer_name", label="Customer / العميل", aliases=["Bill To", "Buyer"]),
+                    _f("customer_vat", label="Customer VAT No / الرقم الضريبي للعميل", aliases=["Buyer VAT"]),
                     _f("po_number", label="PO Number / رقم أمر الشراء", aliases=["Purchase Order", "PO No"]),
                     _f("subtotal", "currency", "Subtotal / المجموع الفرعي", True, ["Sub Total", "Net Amount"]),
                     _f("vat_amount", "currency", "VAT / ضريبة القيمة المضافة", False, ["VAT 15%", "Tax", "VAT Amount"]),
@@ -429,11 +439,18 @@ def extract_pages(data: bytes, mime: str, pages: list[int]) -> tuple[bytes, str]
     """Return a new file containing only `pages` (1-based) of the original."""
     if mime == "application/pdf":
         import pypdfium2 as pdfium
-        src = pdfium.PdfDocument(data)
-        out = pdfium.PdfDocument.new()
-        out.import_pages(src, [p - 1 for p in pages])
-        buf = io.BytesIO()
-        out.save(buf)
+
+        from .preprocess import PDFIUM_LOCK
+        with PDFIUM_LOCK:   # PDFium is not thread-safe
+            src = pdfium.PdfDocument(data)
+            out = pdfium.PdfDocument.new()
+            try:
+                out.import_pages(src, [p - 1 for p in pages])
+                buf = io.BytesIO()
+                out.save(buf)
+            finally:
+                out.close()
+                src.close()
         return buf.getvalue(), ".pdf"
     from PIL import Image
     img = Image.open(io.BytesIO(data))
@@ -532,13 +549,10 @@ def suggest_from_results(results: list[DocumentResult]) -> dict:
 def platform_callback(tenant: str) -> tuple[str, dict]:
     """Where a platform "Start a bot" delivery goes: the Command Center (DOCAUTO_PLATFORM_URL; {tenant} is replaced in
     SaaS), authenticated with this service's own token, so no secret is stored in a process."""
-    base = os.environ.get("DOCAUTO_PLATFORM_URL", "").strip().rstrip("/")
+    base = events.platform_base(tenant)
     if not base:
         raise RuntimeError("DOCAUTO_PLATFORM_URL is not set: DocFlow does not know where the Command Center is")
-    headers = {"X-OOA-Tenant": tenant}
-    if os.environ.get("DOCAUTO_API_TOKEN"):
-        headers["Authorization"] = "Bearer " + os.environ["DOCAUTO_API_TOKEN"]
-    return base.replace("{tenant}", tenant) + "/api/docflow-callback/start-bot", headers
+    return base + "/api/docflow-callback/start-bot", {"X-OOA-Tenant": tenant, **events.platform_auth()}
 
 
 class DocFlowService:
@@ -554,6 +568,16 @@ class DocFlowService:
         svc.post_processors.append(self._post_process)
         svc.listeners.append(self._on_event)
         self._seed()
+        # deliveries and Command Center events go through the durable outbox (docauto.outbox)
+        self.outbox = outbox.Sender(self.store, {"delivery": self._send_delivery_item, "event": self._send_event_item},
+                                    on_sent=self._outbox_sent, on_failed=self._outbox_failed,
+                                    name=f"docflow-outbox-{tenant}")
+        self.outbox.start()
+        from .testsets import TestSets
+        self.testsets = TestSets(self)
+        self._maint = threading.Thread(target=self._maintenance_loop, name=f"docflow-maintenance-{tenant}",
+                                       daemon=True)
+        self._maint.start()
 
     # ---------------------------------------------------------------- setup
     def _seed(self) -> None:
@@ -646,6 +670,11 @@ class DocFlowService:
         for t in (fl.review.fieldConfidence, fl.review.documentConfidence):
             if not 0 <= t <= 1:
                 raise InvalidInput("confidence thresholds must be between 0 and 1")
+        for name, t in fl.review.fieldThresholds.items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""):
+                raise InvalidInput(f"field threshold: '{name}' is not a field name")
+            if not 0 <= t <= 1:
+                raise InvalidInput(f"field threshold for '{name}' must be between 0 and 1")
         for i, r in enumerate(fl.rules):
             r.id = r.id or f"r{i + 1}"
             if r.type == "lookup" and r.params.get("table") and not self.store.ref_get(r.params["table"]):
@@ -705,7 +734,9 @@ class DocFlowService:
             languages=(dt.languages if dt else None) or ["en", "ar"], capabilities=fl.engine.capabilities or ["ocr_printed"],
             schema=dt.schema() if dt else None, instanceId=fl.id, instanceVersion=fl.version, source=source,
             doctypeId=dt.id if dt else None, fieldThreshold=fl.review.fieldConfidence,
-            docThreshold=fl.review.documentConfidence, instructions=instructions, **extra)
+            docThreshold=fl.review.documentConfidence, fieldThresholds=fl.review.fieldThresholds,
+            einvoiceFirst=fl.intake.einvoiceFirst, instructions=instructions, maskPii=fl.engine.maskPii,
+            cloudImages=fl.engine.allowImages, **extra)
 
     def upload(self, flow_id: str, data: bytes, file_name: str, source: str = "upload", wait: bool = False,
                require_live: bool = False) -> dict:
@@ -715,12 +746,26 @@ class DocFlowService:
         types = self.flow_doctypes(fl)
         if not types:
             raise InvalidInput("no document types available - create one first")
-        if fl.classify.mode == "single" or (len(types) == 1 and not fl.classify.split):
+        inv_type = self._einvoice_type(fl, types, data, file_name)
+        if inv_type is not None:  # an e-invoice needs no recognising or splitting: it says what it is
+            ids = self.svc.submit(data, file_name, self._options(fl, inv_type, source), wait=wait)
+        elif fl.classify.mode == "single" or (len(types) == 1 and not fl.classify.split):
             ids = self.svc.submit(data, file_name, self._options(fl, types[0], source), wait=wait)
         else:
             opt = self._options(fl, None, source, role="batch", waitChildren=wait)
             ids = self.svc.submit(data, file_name, opt, wait=wait)
         return {**ids, **self.document(ids["documentId"], brief=True)}
+
+    @staticmethod
+    def _einvoice_type(fl: Flow, types: list[DocType], data: bytes, file_name: str) -> Optional[DocType]:
+        """The process's invoice type when the file is an e-invoice (UBL XML, or a PDF carrying one)."""
+        if not fl.intake.einvoiceFirst or (fl.classify.mode == "single" and not file_name.lower().endswith(".xml")):
+            return None
+        dt = next((t for t in types if t.category == "invoice" or t.id == "invoice"), None)
+        if dt is None:
+            return None
+        from .preprocess import sniff_mime
+        return dt if einvoice.read_file(data, sniff_mime(data, file_name)) else None
 
     # ---------------------------------------------------------------- post-processing (inside the job)
     def _post_process(self, doc_id: str, result: DocumentResult, opt: ProcessOptions, status: str) -> Optional[str]:
@@ -793,9 +838,10 @@ class DocFlowService:
         res = self.store.get_result(doc_id)
         row["fields"] = {f.name: f.value for f in res.fields} if res else {}
         row["confidence"] = {f.name: f.confidence for f in res.fields} if res else {}
+        row["locations"] = locations(res) if res else {}      # where each value is on the pages (review highlight)
+        row["einvoice"] = res.einvoice if res else None       # e-invoice XML / QR data and its checks
         row["children"] = self.store.children(doc_id) if row["status"] == "split" else []
-        job = self.store._one("SELECT error FROM jobs WHERE document_id=? ORDER BY created_at DESC LIMIT 1", (doc_id,))
-        row["error"] = json.loads(job["error"]) if job and job["error"] else None
+        row["error"] = self.store.last_job_error(doc_id)
         return row
 
     def review(self, doc_id: str, fields: dict, reviewer: str, action: str = "submit") -> dict:
@@ -846,7 +892,72 @@ class DocFlowService:
                 fl = self.flow(row["instance_id"])
             except InvalidInput:
                 return
-            threading.Thread(target=self._deliver, args=(fl, doc_id, status), daemon=True).start()
+            platform = ({"success": "processed", "validation": "needs_review"} if event == "processed" else
+                        {"validated": "approved", "invalid": "rejected"} if event == "validated" else {}).get(status)
+            if platform:
+                self._event(platform, doc_id, fl, status)
+            self._queue_deliveries(fl, doc_id, status)
+
+    def _event(self, event: str, doc_id: str, fl: Optional[Flow] = None, status: Optional[str] = None) -> None:
+        """Queue an event for the OOA Command Center (docauto.events) in the outbox, in the caller's transaction.
+        Nothing is queued without DOCAUTO_PLATFORM_URL. Never raises."""
+        if not events.platform_base(self.tenant):
+            return
+        try:
+            row = self.store.doc_row(doc_id)
+            if not row or not row.get("instance_id"):
+                return
+            fl = fl or self.flow(row["instance_id"])
+            res = self.store.get_result(doc_id)
+            payload = events.body(event, doc_id, fl.id, fl.name, status or row["status"], row.get("file_name"),
+                                  row.get("doctype_id"), {f.name: f.value for f in res.fields} if res else {})
+            self.store.outbox_add("event", payload, doc_id, fl.id, event, wake=self.outbox.wake)
+        except Exception:
+            log.exception("event %s for %s failed", event, doc_id)
+
+    def _queue_deliveries(self, fl: Flow, doc_id: str, status: str) -> int:
+        """Queue the flow's deliveries for this status in the outbox (sent by the background sender, with retries).
+        The payload is taken now, so a later change does not alter what this status delivers."""
+        n = 0
+        for dv in fl.deliveries:
+            if not dv.enabled or status not in dv.on:
+                continue
+            body = self.payload(fl, doc_id, status)
+            self.store.outbox_add("delivery", {"flowId": fl.id, "flowName": fl.name, "status": status,
+                                               "delivery": dv.model_dump(), "body": body},
+                                  doc_id, fl.id, dv.name or dv.type, wake=self.outbox.wake)
+            n += 1
+        return n
+
+    # ---------------------------------------------------------------- outbox handlers (sender thread)
+    def _send_event_item(self, item: dict) -> tuple[bool, str, bool]:
+        return events.send(self.tenant, item["payload"])
+
+    def _send_delivery_item(self, item: dict) -> tuple[bool, str, bool]:
+        p = item["payload"]
+        return self._send_delivery(Delivery.model_validate(p["delivery"]), item["document_id"], p["status"], p["body"])
+
+    def _outbox_sent(self, item: dict, detail: str) -> None:
+        if item["kind"] == "delivery":
+            dv = item["payload"]["delivery"]
+            self.store.delivery_log(item["flow_id"], item["document_id"], dv.get("name") or dv["type"], dv["type"],
+                                    True, detail)
+
+    def _outbox_failed(self, item: dict, detail: str) -> None:
+        """After the last attempt: the delivery log says so and the Command Center hears "delivery_failed"."""
+        if item["kind"] != "delivery":
+            return
+        dv = item["payload"]["delivery"]
+        self.store.delivery_log(item["flow_id"], item["document_id"], dv.get("name") or dv["type"], dv["type"],
+                                False, detail)
+        try:
+            fl = self.flow(item["flow_id"])
+        except InvalidInput:
+            return
+        self._event("delivery_failed", item["document_id"], fl, item["payload"]["status"])
+
+    def outbox_status(self, status: Optional[str] = None, limit: int = 100) -> list[dict]:
+        return self.store.outbox_list(status, limit)
 
     def _learn(self, dt_id: str, doc_id: str, corrections: list[dict]) -> None:
         from .instances import find_label_for_value  # shared helper
@@ -899,54 +1010,65 @@ class DocFlowService:
                 "fileUrl": f"/api/docs/v1/documents/{doc_id}/file"}
 
     def _deliver(self, fl: Flow, doc_id: str, status: str, only: Optional[str] = None) -> list[dict]:
+        """Send the flow's deliveries now, once each, and log them (the "Test" button; processing uses the outbox)."""
         results = []
         for dv in fl.deliveries:
             if not dv.enabled or (only and dv.id != only) or (not only and status not in dv.on):
                 continue
-            ok, detail = False, ""
             try:
-                body = self.payload(fl, doc_id, status)
-                if dv.type in ("webhook", "start_bot"):
-                    headers = {"Content-Type": "application/json"}
-                    url = dv.params.get("url", "")
-                    if dv.type == "start_bot":
-                        body = {"bot": dv.params.get("bot", ""), "pool": dv.params.get("pool", ""),
-                                "requestedBy": dv.params.get("requestedBy", ""), "input": body}
-                        if dv.params.get("platform"):  # the OOA Command Center starts the bot (see platform_callback)
-                            url, extra = platform_callback(self.tenant)
-                            headers.update(extra)
-                    if dv.params.get("authHeader"):
-                        headers["Authorization"] = dv.params["authHeader"]
-                    for attempt in range(2):
-                        try:
-                            r = httpx.post(url, json=body, headers=headers, timeout=15)
-                            ok, detail = r.status_code < 300, f"HTTP {r.status_code}"
-                            if ok:
-                                break
-                        except httpx.HTTPError as e:
-                            detail = f"{type(e).__name__}: {e}"
-                        time.sleep(1)
-                elif dv.type == "folder":
-                    folder = Path(dv.params["path"]) / status
-                    folder.mkdir(parents=True, exist_ok=True)
-                    stem = Path(body["fileName"] or doc_id).stem
-                    (folder / f"{stem}_{doc_id[:8]}.json").write_text(json.dumps(body, ensure_ascii=False, indent=2,
-                                                                                 default=str), encoding="utf-8")
-                    f = self.store.file_bytes(doc_id)
-                    if f:
-                        (folder / f"{stem}_{doc_id[:8]}{Path(f[1]).suffix}").write_bytes(f[0])
-                    if status in ("validated", "invalid"):
-                        for p in (Path(dv.params["path"]) / "validation").glob(f"{stem}_{doc_id[:8]}*"):
-                            p.unlink(missing_ok=True)
-                    ok, detail = True, str(folder)
-                elif dv.type == "excel":
-                    self._append_excel(Path(dv.params["path"]), body)
-                    ok, detail = True, dv.params["path"]
+                ok, detail, _ = self._send_delivery(dv, doc_id, status, self.payload(fl, doc_id, status))
             except Exception as e:
-                detail = f"{type(e).__name__}: {e}"
+                ok, detail = False, f"{type(e).__name__}: {e}"
             self.store.delivery_log(fl.id, doc_id, dv.name or dv.type, dv.type, ok, detail)
             results.append({"delivery": dv.name or dv.type, "type": dv.type, "ok": ok, "detail": detail})
         return results
+
+    def _send_delivery(self, dv: Delivery, doc_id: str, status: str, body: dict) -> tuple[bool, str, bool]:
+        """One attempt at one delivery. Returns (delivered, detail, worth retrying)."""
+        try:
+            if dv.type in ("webhook", "start_bot"):
+                headers = {"Content-Type": "application/json"}
+                url = dv.params.get("url", "")
+                if dv.type == "start_bot":
+                    body = {"bot": dv.params.get("bot", ""), "pool": dv.params.get("pool", ""),
+                            "requestedBy": dv.params.get("requestedBy", ""), "input": body}
+                    if dv.params.get("platform"):  # the OOA Command Center starts the bot (see platform_callback)
+                        try:
+                            url, extra = platform_callback(self.tenant)
+                        except RuntimeError as e:
+                            return False, str(e), False
+                        headers.update(extra)
+                if dv.params.get("authHeader"):
+                    headers["Authorization"] = dv.params["authHeader"]
+                try:
+                    r = httpx.post(url, json=body, headers=headers, timeout=15)
+                except httpx.HTTPError as e:
+                    return False, f"{type(e).__name__}: {e}", True
+                ok = r.status_code < 300
+                # 4xx other than timeout / too many requests: the receiver refused it, a retry will not help
+                return ok, f"HTTP {r.status_code}", not ok and not (400 <= r.status_code < 500
+                                                                     and r.status_code not in (408, 429))
+            if dv.type == "folder":
+                folder = Path(dv.params["path"]) / status
+                folder.mkdir(parents=True, exist_ok=True)
+                stem = Path(body["fileName"] or doc_id).stem
+                (folder / f"{stem}_{doc_id[:8]}.json").write_text(json.dumps(body, ensure_ascii=False, indent=2,
+                                                                             default=str), encoding="utf-8")
+                f = self.store.file_bytes(doc_id)
+                if f:   # the original, decrypted: the folder is the customer's own output
+                    (folder / f"{stem}_{doc_id[:8]}{Path(f[1]).suffix}").write_bytes(f[0])
+                if status in ("validated", "invalid"):
+                    for p in (Path(dv.params["path"]) / "validation").glob(f"{stem}_{doc_id[:8]}*"):
+                        p.unlink(missing_ok=True)
+                return True, str(folder), False
+            if dv.type == "excel":
+                self._append_excel(Path(dv.params["path"]), body)
+                return True, dv.params["path"], False
+            return False, f"unknown delivery type '{dv.type}'", False
+        except OSError as e:   # folder offline, workbook open in Excel...: try again later
+            return False, f"{type(e).__name__}: {e}", True
+        except Exception as e:
+            return False, f"{type(e).__name__}: {e}", False
 
     def _append_excel(self, path: Path, body: dict) -> None:
         from openpyxl import Workbook, load_workbook
@@ -1030,6 +1152,9 @@ class DocFlowService:
         return proposal
 
     def _ai_suggest(self, llm, results, base: dict) -> dict:
+        if not llm.info.runsLocally and self.svc.mask_pii_default:   # cloud model: personal data masked first
+            m = pii.PiiMasker()
+            results = [m.mask_document(r) for r in results]
         prompt = ("You design data-extraction schemas. From the OCR text of sample documents below, propose the fields "
                   "a business would extract. Reply with JSON: {\"name\": str, \"category\": one of "
                   f"{list(LIBRARY) + ['custom']}, \"keywords\": [str], \"fields\": [{{\"name\": snake_case, \"type\": "
@@ -1092,9 +1217,7 @@ class DocFlowService:
             per.append({"id": f.id, "name": f.name, "isInbox": f.isInbox, "status": f.status, "stats": st})
         q = self.review_queue(None)
         month = datetime.now(timezone.utc).strftime("%Y-%m-01")
-        used = self.store._one("SELECT COALESCE(SUM(u.pages),0) p, COALESCE(SUM(u.credits),0) cr FROM usage u JOIN documents d ON d.id=u.document_id "
-                               "WHERE d.instance_id IS NOT NULL AND u.ts >= ? AND u.capability IN ('ocr_printed','tables','ocr_handwriting','layout','key_value')",
-                               (month,))
+        used = self.store.month_usage(month)
         return {"totals": self.store.instance_stats(None), "flows": per, "review": len(q),
                 "pagesThisMonth": used["p"], "creditsThisMonth": used["cr"],
                 "overdue": sum(1 for x in q if x["overdue"]), "doctypes": len(self.doctypes()),
@@ -1137,9 +1260,38 @@ class DocFlowService:
                                                                "slaHours": fl.review.slaHours}, timeout=10)
                     except httpx.HTTPError:
                         log.warning("SLA webhook failed for %s", d["id"])
-                self.store.set_doc_fields(d["id"], sla_notified=1)
+                with self.store.tx():
+                    self.store.set_doc_fields(d["id"], sla_notified=1)
+                    self._event("review_overdue", d["id"], fl)
                 n += 1
         return n
+
+    # ---------------------------------------------------------------- retention + housekeeping
+    def enforce_retention(self, force: bool = False) -> int:
+        """Delete documents older than storage.retention_days (DOCAUTO_RETENTION_DAYS; 0 = keep forever), at most
+        once a day unless forced. Documents still in work and test-set files are kept. Returns how many went."""
+        days = float(self.svc.config.get("storage", {}).get("retention_days") or 0)
+        if days <= 0:
+            return 0
+        now = datetime.now(timezone.utc)
+        last = self.store.meta_get("retention_last_run")
+        if not force and last and now - datetime.fromisoformat(last) < timedelta(hours=23):
+            return 0
+        n = self.store.purge_documents((now - timedelta(days=days)).isoformat())
+        self.store.meta_set("retention_last_run", now.isoformat())
+        if n:
+            log.info("retention: deleted %d document(s) older than %g days (tenant %s)", n, days, self.tenant)
+        return n
+
+    def _maintenance_loop(self) -> None:
+        self.testsets.mark_interrupted()
+        while True:
+            try:
+                self.enforce_retention()
+            except Exception:
+                log.exception("retention failed")
+            if self._stop.wait(3600):
+                return
 
     def start_watcher(self, interval: float = 5.0) -> None:
         if self._watcher and self._watcher.is_alive():
@@ -1169,7 +1321,9 @@ class DocFlowService:
         self._watcher.start()
 
     def stop_watcher(self) -> None:
+        """Stop this DocFlow's background threads: folder watcher, outbox sender, housekeeping."""
         self._stop.set()
+        self.outbox.stop()
 
     # ---------------------------------------------------------------- migration from v2 learning instances
     def migrate_instances(self) -> int:

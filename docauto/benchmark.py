@@ -333,11 +333,29 @@ def write_report(report: dict, out_dir: Path, targets: dict[str, tuple[float, st
 
 # ------------------------------------------------------------------ CLI
 def _bench_config(config_path: Optional[str] = None) -> dict:
+    """Files in a temporary folder, data in a throw-away schema of the configured database (drop_bench_schema):
+    the benchmark never touches real documents."""
+    import uuid
+
+    from . import db
     from .config import load_config
 
     cfg = load_config(config_path or os.environ.get("DOCAUTO_CONFIG") or ROOT / "config" / "document-service.yaml")
-    cfg["storage"]["data_dir"] = tempfile.mkdtemp(prefix="docauto-bench-")   # never touch the real database
+    st = cfg["storage"]
+    st["database_url"] = db.resolve_url(st.get("database_url"), st.get("data_dir") or "./data")
+    st["data_dir"] = tempfile.mkdtemp(prefix="docauto-bench-")
+    st["schema_prefix"] = f"bench{uuid.uuid4().hex[:10]}_"
     return cfg
+
+
+def drop_bench_schema(service) -> None:
+    import psycopg
+    from psycopg import sql
+
+    if not service.store.schema.startswith("bench"):
+        return
+    with psycopg.connect(service.store.database_url, autocommit=True) as c:
+        c.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(service.store.schema)))
 
 
 def _load_local_env() -> None:
@@ -378,7 +396,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"Benchmark '{ts.name}': {len(ts.docs)} documents x {len(engines)} engine(s)", file=sys.stderr)
 
     from .pipeline import DocumentService
-    report = run(ts, engines, DocumentService(_bench_config(a.config)), a.extraction, progress=True)
+    svc = DocumentService(_bench_config(a.config))
+    try:
+        report = run(ts, engines, svc, a.extraction, progress=True)
+    finally:
+        svc.close()
+        drop_bench_schema(svc)
     out = Path(a.out) if a.out else ROOT / "benchmark-data" / "reports" / (
         re.sub(r"[^\w.-]+", "-", Path(a.set).resolve().name) + "-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
     md = write_report(report, out, targets, tname)

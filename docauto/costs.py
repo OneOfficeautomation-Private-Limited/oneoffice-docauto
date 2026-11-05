@@ -18,8 +18,12 @@ LIST_PRICES: dict[str, dict[str, float]] = {
 }
 # Claude: tokens per page (page image ~1,600 + OCR text + prompt in; JSON reply + thinking out), estimate
 CLAUDE_TOKENS_PER_PAGE = {"input": 3000, "output": 1000}
+# input / output USD per million tokens. Haiku 5.5's rate is for prompts of 100K tokens or fewer (a page is ~3K);
+# longer prompts cost $0.50 / $2.50.
 CLAUDE_USD_PER_MTOK = {"claude-opus-5-5": (4.00, 20.00), "claude-sonnet-5-5": (2.00, 10.00),
                        "claude-haiku-5-5": (0.10, 0.50)}
+DEFAULT_CLAUDE_MODEL = "claude-haiku-5-5"
+DEFAULT_ESCALATION_MODEL = "claude-sonnet-5-5"
 
 
 def claude_per_1000(model: str) -> Optional[float]:
@@ -33,13 +37,21 @@ def claude_per_1000(model: str) -> Optional[float]:
 def price_per_1000(engine: str, use: str, model: Optional[str] = None) -> Optional[float]:
     """use: 'ocr' or 'extract'. None = no list price known (BYOK contract, template engine...)."""
     if engine == "claude":
-        return claude_per_1000(model or "claude-opus-5-5") if use == "extract" else None
+        return claude_per_1000(model or DEFAULT_CLAUDE_MODEL) if use == "extract" else None
     return LIST_PRICES.get(engine, {}).get(use)
 
 
+def _claude_config(config: dict) -> dict:
+    return ((config.get("providers", {}).get("settings", {}).get("claude", {}) or {}).get("config", {}) or {})
+
+
 def claude_model(config: dict) -> str:
-    return ((config.get("providers", {}).get("settings", {}).get("claude", {}) or {}).get("config", {}) or {}).get(
-        "model") or "claude-opus-5-5"
+    return _claude_config(config).get("model") or DEFAULT_CLAUDE_MODEL
+
+
+def claude_escalation_model(config: dict) -> Optional[str]:
+    """The model that re-reads documents below the review threshold (None = escalation off)."""
+    return _claude_config(config).get("escalationModel", DEFAULT_ESCALATION_MODEL) or None
 
 
 def price_table(config: dict, engine_ids: list[str]) -> dict[str, dict[str, Optional[float]]]:

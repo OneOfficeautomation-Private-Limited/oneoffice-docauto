@@ -25,9 +25,16 @@ See **DESIGN.md** for the architecture and the competitor benchmark.
 ```bash
 pip install -r requirements.txt          # plus: tesseract-ocr with eng + ara language data
 python samples/make_samples.py           # synthetic invoice scan, digital PDF, screenshot
-pytest -q
+pytest -q                                # runs on a throw-away embedded PostgreSQL (or DOCAUTO_TEST_DATABASE_URL)
 DOCAUTO_CONFIG=config/document-service.yaml uvicorn docauto.api.app:app --port 8085
 ```
+
+**Storage:** PostgreSQL only. Without `DOCAUTO_DATABASE_URL` DocFlow starts an embedded PostgreSQL 16 in
+`<data dir>/postgres` (nothing to install); set `DOCAUTO_DATABASE_URL=postgresql://user:pass@host:5432/db` to use your
+own server. Each tenant has its own schema; stored documents are encrypted (`DOCAUTO_FILE_KEY`, else a key generated
+into `<data dir>/file.key`: back it up). An install from before v4 (SQLite `data/docauto.db`) is copied over with
+`python -m docauto.migrate_sqlite data` (`windows\start.ps1` does it on its own). Backups: `python -m docauto.backup
+data backup.dump`. Details: DESIGN.md §12.
 
 DocFlow is a service without screens of its own: people use it through the OOA Command Center
 (AI > Document Automation: inbox, processes, document types, reference data, engines, Test lab, and reviews in the
@@ -36,10 +43,10 @@ Task inbox). See "With the OOA platform" below.
 - http://localhost:8085/docs: interactive API
 - http://localhost:8085/: where to find the screens, and the version
 
-Or with Docker:
+Or with Docker (DocFlow + a PostgreSQL 16 service):
 
 ```bash
-docker compose up --build                                   # Option 1 only by default
+DOCFLOW_DB_PASSWORD=... docker compose up --build           # Option 1 only by default
 docker compose build --build-arg WITH_PADDLE=true           # add PaddleOCR
 ```
 
@@ -82,6 +89,7 @@ Set the environment variables referenced in `config/document-service.yaml` and r
 | AWS Textract | `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (+ `pip install boto3`) |
 | Google Document AI | `GCP_PROJECT`, `DOCAI_LOCATION`, `DOCAI_OCR_PROCESSOR`, `DOCAI_FORM_PROCESSOR`, `GOOGLE_APPLICATION_CREDENTIALS` (+ `pip install google-cloud-documentai`) |
 | LLM (cloud) | `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`, `LLM_REGION` |
+| Claude | `CLAUDE_API_KEY`, `CLAUDE_MODEL` (default `claude-haiku-5-5`), `CLAUDE_ESCALATION_MODEL` (default `claude-sonnet-5-5`, `none` = off) (+ `pip install anthropic`) |
 | LLM (self-hosted) | `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL` |
 
 Then make them the defaults, e.g. `defaults.document_ocr: azure-di`, `defaults.extraction: llm-cloud`. Profiles for air-gapped and SaaS deployments are in `config/profiles/`.
@@ -100,7 +108,32 @@ The OOA Command Center shows DocFlow's screens and forwards to it; set in `confi
 | Setting | Value |
 | --- | --- |
 | `DOCAUTO_API_TOKEN` | the service token; the same value goes in the Command Center's vault (Settings > Document Automation) |
-| `DOCAUTO_PLATFORM_URL` | the Command Center's address, for "Start a bot" deliveries (`{tenant}` is replaced in SaaS) |
+| `DOCAUTO_PLATFORM_URL` | the Command Center's address, for "Start a bot" deliveries and document events (`{tenant}` is replaced in SaaS) |
+
+With `DOCAUTO_PLATFORM_URL` set, DocFlow also tells the Command Center when a document in a process is processed,
+needs review, is approved or rejected, has a failed delivery, or is overdue for review (DESIGN.md §9.7). Events and
+deliveries go through a durable outbox: they survive restarts, are retried with backoff and sent once
+(`GET /api/docs/v1/df/outbox`).
+
+### Production settings
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `DOCAUTO_DATABASE_URL` | empty = embedded PostgreSQL in `<data dir>/postgres` | the PostgreSQL server (UTF8) |
+| `DOCAUTO_FILE_KEY` | empty = generated into `<data dir>/file.key` | Fernet key(s) for documents at rest; `new,old` rotates |
+| `DOCAUTO_RETENTION_DAYS` | 30 | documents older than this are deleted daily; 0 = keep forever |
+| `DOCAUTO_MASK_PII` | true | mask national IDs / Iqama, IBANs, phones, e-mails before cloud AI models (then no page images unless a process allows them) |
+| `DOCAUTO_DB_POOL_SIZE` | 20 | database connections per server and process |
+| `DOCAUTO_JOB_STALE_SECONDS` | 90 | a running job without heartbeat this long is taken over by another worker |
+| `DOCAUTO_OUTBOX_MAX_ATTEMPTS` / `DOCAUTO_OUTBOX_BACKOFF` | 10 / 10 s | delivery and event retries (doubling, at most 15 min apart) |
+
+### Test sets (quality gate)
+
+Per document type, keep a set of documents with their correct values (reviewed documents from a process, uploads with
+expected values, or the synthetic seed: `POST /api/docs/v1/df/testsets/seed`) and compare engine combinations on it
+(`POST /df/testsets/{id}/runs` with `{"combos": [{"ocr": "auto", "extraction": "builtin-rules"}, {"ocr": "tesseract",
+"extraction": "claude"}]}`): per-field accuracy, straight-through rate, wrongly auto-approved documents, cost and time
+per page, kept as runs. DESIGN.md §12.7.
 
 Each platform tenant gets its own data under `data/tenants/<tenant>`. The full set-up, permissions and folders are in
 the platform's `docs/DOCUMENT_AUTOMATION.md`.
@@ -120,7 +153,9 @@ clients/java/       Java client for the host RPA tool
 integration/        designer action package manifest
 config/             service config + deployment profiles
 samples/            synthetic test documents + example field schema
-tests/              62 tests (contract, policy/router, extraction, AI option, DocFlow, updates, benchmark, end-to-end API)
+tests/              149 tests (contract, policy/router, extraction, grounding, e-invoices, AI option, escalation, events,
+                    outbox, storage, PII masking, test sets, DocFlow, updates, benchmark, end-to-end API; the Tesseract
+                    ones skip when it is not installed: on Windows they take TESSERACT_CMD from config/local.env)
 windows/            install, start, update (get-docflow.ps1), shortcuts, installer .bat
 .github/workflows/  CI (Linux tests + real Windows install) and Release
 ```

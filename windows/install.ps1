@@ -5,10 +5,13 @@
   What it does (no admin needed except for the optional winget installs):
     1. Checks / installs Python 3.10+ and Tesseract OCR (via winget)
     2. Prepares a local tessdata folder with English + Arabic language data
-    3. Creates a Python virtual environment and installs dependencies
+    3. Creates a Python virtual environment and installs dependencies (with the embedded PostgreSQL server,
+       pgserver + psycopg, and PaddleOCR for CPU, which re-reads weak pages; -NoPaddle skips it)
     4. Creates config\local.env, generates sample documents and runs the test suite
+  DocFlow keeps its data in PostgreSQL: by default an embedded server in data\postgres (nothing to set up);
+  set DOCAUTO_DATABASE_URL in config\local.env to use your own server instead.
 #>
-param([switch]$SkipTests, [switch]$NoShortcuts)
+param([switch]$SkipTests, [switch]$NoShortcuts, [switch]$NoPaddle)
 $ErrorActionPreference = "Stop"
 $App = Split-Path -Parent $PSScriptRoot           # ...\oneoffice-docauto
 Set-Location $App
@@ -84,7 +87,25 @@ if (-not (Test-Path ".venv\Scripts\python.exe")) { $exe = $py[0]; $pre = @($py |
 $vpy = Join-Path $App ".venv\Scripts\python.exe"
 & $vpy -m pip install --upgrade pip --quiet
 & $vpy -m pip install -r requirements.txt --quiet
+if ($LASTEXITCODE -ne 0) { throw "pip install failed - see above." }
 Ok "packages installed"
+
+Step "Checking the embedded PostgreSQL server (pgserver) and the database driver (psycopg)"
+& $vpy -c "import pgserver, psycopg, cryptography; print('    pgserver', pgserver.__file__.split('site-packages')[-1], '| psycopg', psycopg.__version__)"
+if ($LASTEXITCODE -ne 0) { throw "pgserver / psycopg did not install - see above." }
+Ok "PostgreSQL ready (embedded in data\postgres unless DOCAUTO_DATABASE_URL is set)"
+
+if (-not $NoPaddle) {
+    Step "Installing PaddleOCR (CPU) - re-reads pages Tesseract read poorly"
+    & $vpy -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('paddleocr') else 1)"
+    if ($LASTEXITCODE -eq 0) { Ok "PaddleOCR already installed" }
+    else {
+        # the PyPI paddlepaddle wheel is the CPU build (no GPU / CUDA needed)
+        & $vpy -m pip install paddlepaddle paddleocr --quiet
+        if ($LASTEXITCODE -eq 0) { Ok "PaddleOCR installed (CPU)" }
+        else { Warn "PaddleOCR could not be installed: weak pages are not re-read. DocFlow works without it." }
+    }
+}
 
 # ---------------------------------------------------------------- local config
 Step "Creating config\local.env"

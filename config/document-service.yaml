@@ -53,7 +53,8 @@ providers:
         apiKey: ${LLM_API_KEY:-}
     claude:
       config:
-        model: ${CLAUDE_MODEL:-claude-opus-5-5}   # claude-opus-5-5 | claude-sonnet-5-5 | claude-haiku-5-5
+        model: ${CLAUDE_MODEL:-claude-haiku-5-5}  # claude-haiku-5-5 | claude-sonnet-5-5 | claude-opus-5-5
+        escalationModel: ${CLAUDE_ESCALATION_MODEL:-claude-sonnet-5-5}   # re-reads documents below the review threshold; none = off
         effort: ${CLAUDE_EFFORT:-medium}          # low | medium | high
         sendImages: ${CLAUDE_SEND_IMAGES:-true}
         region: ${CLAUDE_REGION:-}
@@ -89,7 +90,11 @@ router:
   backoff_seconds: 0.5
 
 storage:
-  data_dir: ${DOCAUTO_DATA_DIR:-./data}
-  retention_days: 30
+  data_dir: ${DOCAUTO_DATA_DIR:-./data}           # files (encrypted) and, without a database URL, the embedded PostgreSQL
+  database_url: ${DOCAUTO_DATABASE_URL:-}         # postgresql://user:pass@host:5432/db; empty = embedded server in <data_dir>/postgres
+  retention_days: ${DOCAUTO_RETENTION_DAYS:-30}   # documents older than this are deleted daily (0 = keep forever)
+
+privacy:
+  mask_pii: ${DOCAUTO_MASK_PII:-true}   # mask IDs, IBANs, phones and e-mails before cloud AI models (never for local ones)
 
 workers: 4

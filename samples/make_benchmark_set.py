@@ -8,9 +8,11 @@ variants that mimic how documents arrive (the clean-up presets in the OCR strate
   fax     ~100 dpi, black and white, speckles           .png
   photo   phone photo: perspective, uneven light, JPEG  .jpg
   pdf     digital PDF with a text layer (no OCR needed)  .pdf
+  bilingual  Arabic/English labels side by side (optional) .png
 
 Each document has a sibling <name>.truth.json with the correct field values, the full text
-and its variant as a tag. Fields follow samples/invoice_schema.json.
+(not for bilingual pages, whose reading order depends on the engine) and its variant as a tag.
+Fields follow samples/invoice_schema.json.
 
     python samples/make_benchmark_set.py [out_dir] [--count 10] [--seed 7] [--variants clean,scan]
 
@@ -30,7 +32,8 @@ from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 VARIANTS = ("clean", "scan", "fax", "photo", "pdf")
-SUFFIX = {"clean": ".png", "scan": ".jpg", "fax": ".png", "photo": ".jpg", "pdf": ".pdf"}
+EXTRA_VARIANTS = ("bilingual",)          # not in the default set (keeps earlier reports comparable)
+SUFFIX = {"clean": ".png", "scan": ".jpg", "fax": ".png", "photo": ".jpg", "pdf": ".pdf", "bilingual": ".png"}
 JPEG_QUALITY = {"scan": 80, "photo": 60}
 
 SUPPLIERS = ["ACME Trading Co. LLC", "Gulf Office Supplies", "Nile Logistics Ltd", "Red Sea Print House",
@@ -40,6 +43,44 @@ ITEMS = [("RPA licence", 4000), ("Support plan", 2000), ("Printer toner", 350), 
          ("Laptop stand", 180), ("Network switch", 1250), ("Cloud backup (1 yr)", 900),
          ("On-site training", 1500), ("Office chairs", 640), ("Delivery charges", 75)]
 VAT_RATE = 0.15
+# Arabic labels printed next to the English ones on bilingual invoices (KSA tax invoice wording)
+ARABIC_LABELS = {"Tax Invoice": "فاتورة ضريبية", "Invoice Number": "رقم الفاتورة", "Invoice Date": "تاريخ الفاتورة",
+                 "Supplier VAT No": "الرقم الضريبي للمورد", "VAT Number": "الرقم الضريبي", "Customer": "العميل",
+                 "Subtotal": "المجموع الفرعي", "VAT 15%": "ضريبة القيمة المضافة", "Total": "الإجمالي"}
+
+
+# ------------------------------------------------------------------ Arabic shaping (Pillow without libraqm)
+# letter -> first presentation form and number of forms (isolated, final[, initial, medial])
+_FORMS = {"ء": (0xFE80, 1), "آ": (0xFE81, 2), "أ": (0xFE83, 2), "ؤ": (0xFE85, 2), "إ": (0xFE87, 2), "ئ": (0xFE89, 4),
+          "ا": (0xFE8D, 2), "ب": (0xFE8F, 4), "ة": (0xFE93, 2), "ت": (0xFE95, 4), "ث": (0xFE99, 4), "ج": (0xFE9D, 4),
+          "ح": (0xFEA1, 4), "خ": (0xFEA5, 4), "د": (0xFEA9, 2), "ذ": (0xFEAB, 2), "ر": (0xFEAD, 2), "ز": (0xFEAF, 2),
+          "س": (0xFEB1, 4), "ش": (0xFEB5, 4), "ص": (0xFEB9, 4), "ض": (0xFEBD, 4), "ط": (0xFEC1, 4), "ظ": (0xFEC5, 4),
+          "ع": (0xFEC9, 4), "غ": (0xFECD, 4), "ف": (0xFED1, 4), "ق": (0xFED5, 4), "ك": (0xFED9, 4), "ل": (0xFEDD, 4),
+          "م": (0xFEE1, 4), "ن": (0xFEE5, 4), "ه": (0xFEE9, 4), "و": (0xFEED, 2), "ى": (0xFEEF, 2), "ي": (0xFEF1, 4)}
+_LAM_ALEF = {"ا": 0xFEFB, "أ": 0xFEF7, "إ": 0xFEF9, "آ": 0xFEF5}     # isolated; +1 = final
+
+
+def shape_arabic(text: str) -> str:
+    """Arabic text in visual order with joined letter forms, for drawing with a plain TrueType font."""
+    chars, out, i = list(text), [], 0
+    while i < len(chars):
+        c = chars[i]
+        prev_joins = bool(out) and out[-1][1]
+        if c == "ل" and i + 1 < len(chars) and chars[i + 1] in _LAM_ALEF:
+            out.append((chr(_LAM_ALEF[chars[i + 1]] + (1 if prev_joins else 0)), False))
+            i += 2
+            continue
+        if c not in _FORMS:
+            out.append((c, False))
+            i += 1
+            continue
+        base, n = _FORMS[c]
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        joins_next = n == 4 and nxt in _FORMS
+        form = (3 if joins_next else 1) if prev_joins and n > 1 else (2 if joins_next else 0)
+        out.append((chr(base + form), joins_next))
+        i += 1
+    return "".join(ch for ch, _ in out)[::-1]
 
 
 def _money(v: float) -> str:
@@ -82,7 +123,8 @@ def make_invoice(rng: random.Random, index: int) -> dict:
 
 
 # ------------------------------------------------------------------ rendering
-def render(inv: dict) -> Image.Image:
+def render(inv: dict, bilingual: bool = False) -> Image.Image:
+    """The page; bilingual adds each label's Arabic wording right-aligned on the same line."""
     from make_samples import font  # same font lookup as the shipped samples
 
     img = Image.new("RGB", (1700, 2200), "white")
@@ -90,6 +132,9 @@ def render(inv: dict) -> Image.Image:
     y = 120
     for text, size, bold in inv["lines"]:
         d.text((140, y), text, fill="black", font=font(size, bold))
+        label = text.split(":")[0].strip()
+        if bilingual and label in ARABIC_LABELS:
+            d.text((1560, y), shape_arabic(ARABIC_LABELS[label]), fill="black", font=font(size, bold), anchor="ra")
         y += int(size * 2.2)
     return img
 
@@ -153,9 +198,9 @@ def write_pdf(inv: dict, path: Path) -> bool:
 # ------------------------------------------------------------------ set
 def make_set(out: Path, count: int = 10, seed: int = 7, variants: tuple[str, ...] = VARIANTS) -> list[Path]:
     """Write the test set; returns the document paths. The same seed gives the same invoices."""
-    unknown = set(variants) - set(VARIANTS)
+    unknown = set(variants) - set(VARIANTS) - set(EXTRA_VARIANTS)
     if unknown:
-        raise ValueError(f"unknown variants {sorted(unknown)}, expected some of {VARIANTS}")
+        raise ValueError(f"unknown variants {sorted(unknown)}, expected some of {VARIANTS + EXTRA_VARIANTS}")
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     out.mkdir(parents=True, exist_ok=True)
     rng = random.Random(seed)
@@ -167,7 +212,9 @@ def make_set(out: Path, count: int = 10, seed: int = 7, variants: tuple[str, ...
         page = None
         for v in variants:
             path = out / f"{inv['name']}_{v}{SUFFIX[v]}"
-            if v == "pdf":
+            if v == "bilingual":
+                render(inv, bilingual=True).save(path)
+            elif v == "pdf":
                 if not write_pdf(inv, path):
                     print("reportlab not installed - skipping pdf variants")
                     continue
@@ -180,11 +227,12 @@ def make_set(out: Path, count: int = 10, seed: int = 7, variants: tuple[str, ...
                     img.save(path, quality=JPEG_QUALITY[v])
                 else:
                     img.save(path)
-            truth = {"fields": inv["fields"], "text": text, "tags": [v]}
+            truth = {"fields": inv["fields"], "text": "" if v == "bilingual" else text, "tags": [v]}
             path.with_suffix(".truth.json").write_text(json.dumps(truth, indent=2), encoding="utf-8")
             written.append(path)
     # no "schema" key: the benchmark then uses samples/invoice_schema.json
-    (out / "set.json").write_text(json.dumps({"name": f"synthetic invoices (seed {seed})", "languages": ["en"]},
+    langs = ["en", "ar"] if "bilingual" in variants else ["en"]
+    (out / "set.json").write_text(json.dumps({"name": f"synthetic invoices (seed {seed})", "languages": langs},
                                              indent=2), encoding="utf-8")
     return written
 
@@ -194,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("out", nargs="?", default=str(ROOT / "benchmark-data" / "synthetic"))
     ap.add_argument("--count", type=int, default=10, help="number of invoices (each in every variant)")
     ap.add_argument("--seed", type=int, default=7)
-    ap.add_argument("--variants", default=",".join(VARIANTS))
+    ap.add_argument("--variants", default=",".join(VARIANTS), help=f"some of {','.join(VARIANTS + EXTRA_VARIANTS)}")
     a = ap.parse_args(argv)
     paths = make_set(Path(a.out), a.count, a.seed, tuple(v.strip() for v in a.variants.split(",") if v.strip()))
     print(f"{len(paths)} documents written to {a.out}")

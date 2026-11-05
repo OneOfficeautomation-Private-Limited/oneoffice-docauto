@@ -37,4 +37,5 @@ def test_costs_endpoint():
     body = TestClient(app).get("/api/docs/v1/costs").json()
     assert body["cloudOptIn"] is False and body["estimate"]["total"] == 0.0      # shipped config: local-only
     assert body["prices"]["tesseract"]["ocr"] == 0.0 and body["prices"]["azure-di"]["ocr"] == 1.5
-    assert body["prices"]["claude"]["extract"] == 32.0 and body["claudeModel"] == "claude-opus-5-5"
+    assert body["prices"]["claude"]["extract"] == 0.8 and body["claudeModel"] == "claude-haiku-5-5"
+    assert body["claudeEscalationModel"] == "claude-sonnet-5-5"

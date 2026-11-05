@@ -115,6 +115,7 @@ class ExtractRequest:
     schema: FieldSchema
     images: list[Image.Image] = field(default_factory=list)
     instructions: Optional[str] = None
+    model: Optional[str] = None            # use this model instead of the engine's own (escalation)
 
 
 class ExtractionProvider(BaseProvider):

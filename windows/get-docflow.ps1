@@ -214,9 +214,17 @@ if (-not $UseGit -and -not $UpToDate) {
             }
         } finally { $za.Dispose() }
         $db = Join-Path $Dir "data\docauto.db"
-        if (Test-Path $db) { Copy-Item $db (Join-Path $bdir "docauto-$stamp.db") }
+        $vpyOld = Join-Path $Dir ".venv\Scripts\python.exe"
+        if ((Test-Path (Join-Path $Dir "docauto\backup.py")) -and (Test-Path $vpyOld)) {
+            # PostgreSQL (DocFlow 4): pg_dump of every tenant's schema
+            Push-Location $Dir
+            & $vpyOld -m docauto.backup (Join-Path $Dir "data") (Join-Path $bdir "docflow-db-$stamp.dump")
+            if ($LASTEXITCODE -ne 0) { Warn "database backup failed - continuing with the update" }
+            Pop-Location
+        } elseif (Test-Path $db) { Copy-Item $db (Join-Path $bdir "docauto-$stamp.db") }
         Get-ChildItem $bdir -Filter "docflow-*.zip" | Sort-Object Name -Descending | Select-Object -Skip 5 | Remove-Item -Force
         Get-ChildItem $bdir -Filter "docauto-*.db" | Sort-Object Name -Descending | Select-Object -Skip 5 | Remove-Item -Force
+        Get-ChildItem $bdir -Filter "docflow-db-*.dump" | Sort-Object Name -Descending | Select-Object -Skip 5 | Remove-Item -Force
         Ok "saved backups\docflow-$stamp.zip"
     }
 

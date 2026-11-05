@@ -30,8 +30,18 @@ def _rule_names(rule: str) -> set[str]:
         return set()
 
 
+def field_threshold_for(name: str, fd, default: float, overrides: dict[str, float] | None = None) -> float:
+    if overrides and overrides.get(name) is not None:
+        return float(overrides[name])
+    if fd is not None and fd.confidenceThreshold is not None:
+        return fd.confidenceThreshold
+    return default
+
+
 def score(doc: DocumentResult, schema: FieldSchema | None, field_threshold: float,
-          doc_threshold: float) -> DocumentResult:
+          doc_threshold: float, field_thresholds: dict[str, float] | None = None) -> DocumentResult:
+    """field_thresholds: a process's own threshold per field name; it wins over the document type's
+    confidenceThreshold, which wins over field_threshold (the process-wide value)."""
     reasons: list[str] = []
     defs = {f.name: f for f in schema.fields} if schema else {}
 
@@ -54,7 +64,7 @@ def score(doc: DocumentResult, schema: FieldSchema | None, field_threshold: floa
             fld.confidence = round(fld.confidence * 0.5, 4)
         elif (fd and fd.regex and not errs and fld.confidence and isinstance(fld.value, str)
               and re.fullmatch(fd.regex, fld.value)):
-            fld.confidence = round(min(MAX_CONFIDENCE, fld.confidence + PATTERN_BOOST), 4)
+            fld.confidence = round(max(fld.confidence, min(MAX_CONFIDENCE, fld.confidence + PATTERN_BOOST)), 4)
 
     # 2) cross-field rules
     if schema and schema.validation:
@@ -71,7 +81,7 @@ def score(doc: DocumentResult, schema: FieldSchema | None, field_threshold: floa
             names = _rule_names(rule)
             for fld in doc.fields:  # a passing consistency rule corroborates its fields
                 if fld.name in names and fld.confidence is not None and fld.validation.passed:
-                    fld.confidence = round(min(MAX_CONFIDENCE, fld.confidence + RULE_BOOST), 4)
+                    fld.confidence = round(max(fld.confidence, min(MAX_CONFIDENCE, fld.confidence + RULE_BOOST)), 4)
 
     # 3) per-field review decision
     for fld in doc.fields:
@@ -79,7 +89,7 @@ def score(doc: DocumentResult, schema: FieldSchema | None, field_threshold: floa
         relevant = fd is None or fd.required or fld.value not in (None, "", [])
         if not relevant:
             continue
-        threshold = fd.confidenceThreshold if fd and fd.confidenceThreshold is not None else field_threshold
+        threshold = field_threshold_for(fld.name, fd, field_threshold, field_thresholds)
         if not fld.validation.passed or fld.confidence is None or fld.confidence < threshold:
             reasons.append(f"field '{fld.name}' needs review")
 

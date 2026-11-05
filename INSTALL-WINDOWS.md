@@ -11,8 +11,10 @@ Double-click **`windows\install.bat`**. It runs these steps:
 1. Finds Python 3.10+ and installs Python 3.12 with `winget` if it's missing.
 2. Finds Tesseract OCR and installs the UB Mannheim build with `winget` if it's missing. Windows may ask for admin approval.
 3. Builds a local `tessdata` folder with English + Arabic language data.
-4. Creates a private Python environment (`.venv`) and installs the packages.
-5. Creates `config\local.env`, generates sample documents and runs the test suite (49 tests).
+4. Creates a private Python environment (`.venv`) and installs the packages, including the embedded PostgreSQL
+   server (`pgserver`) and PaddleOCR for CPU (it re-reads pages Tesseract read poorly; no graphics card needed;
+   skip it with `install.ps1 -NoPaddle`).
+5. Creates `config\local.env`, generates sample documents and runs the test suite (on a temporary database).
 
 If `winget` isn't available, install these by hand, then run `install.bat` again:
 
@@ -54,6 +56,22 @@ The answers are saved in `config\local.env`, a plain text file you can also edit
 
 Double-click **`windows\start.bat`**. Keep the window open while you use the service, and press Ctrl+C to stop it.
 
+DocFlow keeps its data in PostgreSQL. Nothing needs installing: `start.bat` runs an embedded PostgreSQL from
+`data\postgres`, started and stopped with DocFlow. To use your own PostgreSQL server instead, set
+`DOCAUTO_DATABASE_URL=postgresql://user:password@server:5432/docflow` in `config\local.env` (UTF8 database).
+
+**Upgrading from an older DocFlow (SQLite, `data\docauto.db`):** the first `start.bat` copies everything into
+PostgreSQL (every tenant), then starts. The SQLite file and the documents stay where they are; `data\docauto.db.migrated`
+records the copy so it is not done again. By hand: `.venv\Scripts\python.exe -m docauto.migrate_sqlite data`
+(`--dry-run` only counts).
+
+**Keep safe with the data folder:** `data\file.key` encrypts the stored documents. Without it they cannot be read.
+Back it up, or put the key in `DOCAUTO_FILE_KEY` (from your secret store) and delete the file. Database backup:
+`.venv\Scripts\python.exe -m docauto.backup data backups\docflow.dump` (the updater does this before every update).
+
+Documents older than `DOCAUTO_RETENTION_DAYS` (default 30, `0` = keep forever) are deleted every day; documents
+waiting for review and test sets are kept.
+
 | Page | URL |
 |---|---|
 | Screens | OOA Command Center: AI > Document Automation |
@@ -86,3 +104,7 @@ Then open the Validation Station to approve the fields it flagged.
 | Azure / LLM shows `available: false` | Read the `reason` column in the providers list; usually a missing key or URL in `local.env` |
 | `POLICY_DENIED` | The profile blocks that engine (e.g. cloud engine under `onprem_airgapped`) |
 | Port 8085 busy | Change `DOCAUTO_PORT` in `config\local.env` |
+| `cannot decrypt a stored file` | `DOCAUTO_FILE_KEY` / `data\file.key` is not the key the files were written with: restore the right key (add the old one after a comma to rotate) |
+| `the DocFlow database must use UTF8` | The server in `DOCAUTO_DATABASE_URL` uses another encoding: create the database with `ENCODING 'UTF8'` |
+| Start stops at "Copying the SQLite data to PostgreSQL failed" | Read the error above it; nothing was changed, run `start.bat` again once fixed |
+| A `postgres.exe` keeps running after DocFlow was killed | Harmless: the next start uses it. To stop it: `.venv\Lib\site-packages\pgserver\pginstall\bin\pg_ctl.exe -D data\postgres stop` |

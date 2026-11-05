@@ -89,7 +89,7 @@ def test_defaults_without_images_or_fallbacks():
     p = provider(fc, sendImages=False, fallbacks="")
     p.extract(ExtractRequest(document=doc(), schema=SCHEMA, images=[Image.new("RGB", (10, 10))]))
     kw = fc.calls[0]
-    assert kw["model"] == "claude-opus-5-5" and kw["output_config"]["effort"] == "medium"
+    assert kw["model"] == "claude-haiku-5-5" and kw["output_config"]["effort"] == "medium"
     assert "betas" not in kw and [c["type"] for c in kw["messages"][0]["content"]] == ["text"]
 
 
@@ -115,3 +115,32 @@ def test_health_without_sdk_or_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     p.api_key = ""
     assert not p.health_check().ok and "API key" in p.health_check().message
+
+
+# ---------------------------------------------------------------- model defaults, valid parameters, escalation
+def test_haiku_is_the_default_and_gets_only_what_it_accepts():
+    fc = FakeClient({"fields": {}})
+    p = provider(fc)                                     # default config: Haiku 5.5, fallbacks "default"
+    assert p.model == "claude-haiku-5-5" and p.escalation_model == "claude-sonnet-5-5"
+    p.extract(ExtractRequest(document=doc(), schema=SCHEMA))
+    kw = fc.calls[0]
+    assert kw["model"] == "claude-haiku-5-5" and kw["output_config"]["effort"] == "medium"
+    # Haiku 5.5: no server-side fallback, no sampling parameters, no thinking budget, no prefill
+    assert not {"betas", "extra_body", "temperature", "top_p", "top_k", "thinking"} & set(kw)
+    assert [m["role"] for m in kw["messages"]] == ["user"]
+
+
+def test_escalation_model_request_keeps_fallbacks():
+    fc = FakeClient({"fields": {}})
+    p = provider(fc)
+    p.extract(ExtractRequest(document=doc(), schema=SCHEMA, model="claude-sonnet-5-5"))
+    kw = fc.calls[0]
+    assert kw["model"] == "claude-sonnet-5-5" and kw["betas"] == ["server-side-fallback-2026-07-01"]
+    assert kw["extra_body"] == {"fallbacks": "default"} and "temperature" not in kw
+
+
+def test_escalation_can_be_switched_off_and_old_haiku_has_no_effort():
+    assert provider(FakeClient({}), escalationModel=None).escalation_model is None
+    assert provider(FakeClient({}), escalationModel="").escalation_model is None
+    params = mod.request_params("claude-haiku-4-5", "medium", {"type": "object"}, "default")
+    assert "effort" not in params["output_config"] and "betas" not in params

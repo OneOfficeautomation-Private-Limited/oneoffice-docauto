@@ -12,6 +12,19 @@ permissions:
 jobs:
   tests-linux:
     runs-on: ubuntu-latest
+    services:
+      postgres:            # the suite runs on PostgreSQL (DOCAUTO_TEST_DATABASE_URL); Windows uses the embedded server
+        image: postgres:16
+        env:
+          POSTGRES_USER: docflow
+          POSTGRES_PASSWORD: docflow
+          POSTGRES_DB: docflow_test
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U docflow" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DOCAUTO_TEST_DATABASE_URL: postgresql://docflow:docflow@localhost:5432/docflow_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,7 +70,9 @@ jobs:
           $v | Format-List
           $root = Invoke-RestMethod http://localhost:8085/
           if ($root.service -ne "OneOffice DocFlow") { throw "DocFlow did not answer" }
-          "DocFlow $($v.version) is running"
+          $health = Invoke-RestMethod http://localhost:8085/health
+          if ($health.database.kind -ne "postgresql (embedded)") { throw "DocFlow is not on its embedded PostgreSQL" }
+          "DocFlow $($v.version) is running on $($health.database.kind)"
       - name: Update check (should say up to date)
         shell: powershell
         env:

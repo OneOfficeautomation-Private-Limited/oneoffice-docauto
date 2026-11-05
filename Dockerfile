@@ -20,6 +20,9 @@ RUN if [ "$WITH_PADDLE" = "true" ]; then pip install --no-cache-dir paddleocr pa
 COPY docauto ./docauto
 COPY options ./options
 COPY config ./config
+COPY samples ./samples
+# PostgreSQL: set DOCAUTO_DATABASE_URL (docker-compose.yml runs a postgres service). Without it DocFlow starts an
+# embedded PostgreSQL in /app/data/postgres. DOCAUTO_FILE_KEY: the key that encrypts stored documents.
 ENV DOCAUTO_CONFIG=/app/config/document-service.yaml PYTHONUNBUFFERED=1
 VOLUME ["/app/data"]
 EXPOSE 8085

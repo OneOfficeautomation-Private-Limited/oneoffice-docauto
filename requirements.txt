@@ -11,6 +11,11 @@ opencv-python-headless>=4.9
 pypdfium2>=4.28
 pdfplumber>=0.11
 openpyxl>=3.1
+# storage: PostgreSQL (DOCAUTO_DATABASE_URL, else an embedded server via pgserver) + file encryption at rest
+psycopg[binary]>=3.2
+pgserver>=0.1.4
+psutil>=5.9
+cryptography>=42
 # option pack 1 (open source)
 pytesseract>=0.3.10
 # paddleocr / paddlepaddle  -> install only where wanted (large)

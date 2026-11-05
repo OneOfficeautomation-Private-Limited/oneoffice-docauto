@@ -74,6 +74,13 @@ class Table(BaseModel):
         return grid
 
 
+class Barcode(BaseModel):
+    """A machine-readable code found on the page (the core's OpenCV reader: QR codes)."""
+    type: str = "qr"
+    text: str = ""
+    bbox: Optional[BBox] = None
+
+
 class KeyValue(BaseModel):
     key: str
     value: str = ""
@@ -93,6 +100,7 @@ class Page(BaseModel):
     words: list[Word] = Field(default_factory=list)
     tables: list[Table] = Field(default_factory=list)
     keyValuePairs: list[KeyValue] = Field(default_factory=list)
+    barcodes: list[Barcode] = Field(default_factory=list)
 
 
 class Classification(BaseModel):
@@ -104,6 +112,19 @@ class Classification(BaseModel):
 class FieldValidation(BaseModel):
     passed: bool = True
     errors: list[str] = Field(default_factory=list)
+
+
+class Location(BaseModel):
+    """Where a value was found on the pages (see docauto.grounding)."""
+    page: Optional[int] = None
+    bbox: Optional[BBox] = None
+    grounded: bool = False
+
+
+class RowLocation(Location):
+    """One table row: the union of its cells, and each cell found."""
+    row: int
+    cells: dict[str, Location] = Field(default_factory=dict)
 
 
 class ExtractedField(BaseModel):
@@ -118,6 +139,12 @@ class ExtractedField(BaseModel):
     validation: FieldValidation = Field(default_factory=FieldValidation)
     corrected: bool = False
     originalValue: Any = None
+    # grounding: True = the value was found on the page (page + bbox point at it), False = not found,
+    # None = not checked (empty value, booleans). groundedBy: "ocr" (page words), "qr" (e-invoice QR code),
+    # "einvoice-xml" (the invoice's own XML, no page location)
+    grounded: Optional[bool] = None
+    groundedBy: Optional[str] = None
+    rowLocations: Optional[list[RowLocation]] = None   # table fields: where each row and cell is
 
 
 class ReviewStatus(str, Enum):
@@ -143,6 +170,8 @@ class ProvenanceStep(BaseModel):
     pages: int = 0
     credits: float = 0.0
     fallbackFrom: Optional[str] = None
+    model: Optional[str] = None           # the engine's model (AI extraction)
+    selected: Optional[bool] = None       # escalated extraction: whether this attempt's result was kept
 
 
 class Provenance(BaseModel):
@@ -170,6 +199,7 @@ class DocumentResult(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
     warnings: list[str] = Field(default_factory=list)
     raw: Optional[dict[str, Any]] = None
+    einvoice: Optional[dict[str, Any]] = None   # e-invoice data read from XML or a QR code (docauto.einvoice)
 
     def rebuild_text(self) -> None:
         self.text = "\f".join("\n".join(l.text for l in p.lines) for p in self.pages)
