@@ -21,9 +21,12 @@ from .extraction import _labels, _norm, label_matches
 from .models import BBox, Cell, DocumentResult, FieldDef, FieldSchema, Page, Table, Word
 from .normalize import detect_direction, union_bbox
 
-# the first words of a line that ends the items: totals, tax, amount due
-_TOTALS = re.compile(r"(?i)^(?:sub[\s-]*total|total|grand\s+total|net\s+total|vat|tax|amount\s+due|balance(?:\s+due)?|"
-                     r"discount|shipping|المجموع|الإجمالي|الاجمالي|المجموع الفرعي|ضريبة|الضريبة|المبلغ المستحق|الخصم)\b")
+# the first words of a line that ends the items: totals, tax, amount due ("Subtota]", "Tota1": OCR often misreads the
+# last letter of Total, hence (?!\w) rather than \b at the end, which a "]" would not satisfy)
+_TOTAL = r"tota[l1i|\]]"
+_TOTALS = re.compile(r"(?i)^(?:sub[\s-]*" + _TOTAL + "|" + _TOTAL + r"|grand\s+" + _TOTAL + r"|net\s+" + _TOTAL +
+                     r"|vat|tax|amount\s+due|balance(?:\s+due)?|"
+                     r"discount|shipping|المجموع|الإجمالي|الاجمالي|المجموع الفرعي|ضريبة|الضريبة|المبلغ المستحق|الخصم)(?!\w)")
 MIN_COLUMNS = 2            # captions of at least this many columns make a header row
 HEADER_SHARE = 0.6         # ...and they are most of the row's words (not "Total Amount: 1,000")
 CONFIDENCE = 0.85          # a table rebuilt from layout: a little less sure than the words themselves

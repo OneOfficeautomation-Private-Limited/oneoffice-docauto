@@ -41,7 +41,10 @@ def database():
     tmp = None
     if not url:
         import pgserver
-        tmp = tempfile.mkdtemp(prefix="docauto-pg-")
+        # not mkdtemp: on Windows it gives the folder an owner-only ACL (Python 3.12.4+), which initdb cannot open
+        # once it has dropped administrator rights ("could not access directory ... Invalid argument")
+        tmp = os.path.join(tempfile.gettempdir(), f"docauto-pg-{uuid.uuid4().hex[:8]}")
+        os.makedirs(tmp)
         srv = pgserver.get_server(tmp, cleanup_mode="delete")
         from docauto import db
         db._ensure_database(srv.get_uri(), "docflow_test")
