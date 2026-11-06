@@ -86,14 +86,15 @@ def up(client, fid):
     return r.json()["documents"][0]["documentId"]
 
 
-def wait_for(got, event, timeout=8):
+def wait_for(got, event, timeout=8, count=1):
+    """The events of this kind once at least `count` have arrived (documents are read in parallel)."""
     end = time.time() + timeout
     while time.time() < end:
         hit = [p for _, p in got if p["event"] == event]
-        if hit:
+        if len(hit) >= count:
             return hit
         time.sleep(0.05)
-    raise AssertionError(f"no {event} event in {[p['event'] for _, p in got]}")
+    raise AssertionError(f"not {count} {event} event(s) in {[p['event'] for _, p in got]}")
 
 
 def test_processed_review_and_decisions(client, emitted):
@@ -108,7 +109,7 @@ def test_processed_review_and_decisions(client, emitted):
     strict = client.post(f"{DF}/flows", json={"name": "Strict", "docTypes": ["invoice"],
                                               "review": {"fieldThresholds": {"total": 0.999}}}).json()["id"]
     d2, d3 = up(client, strict), up(client, strict)
-    assert {p["document_id"] for p in wait_for(emitted, "needs_review")} == {d2, d3}
+    assert {p["document_id"] for p in wait_for(emitted, "needs_review", count=2)} == {d2, d3}
     client.post(f"{DF}/documents/{d2}/review", json={"reviewer": "qa", "fields": {"total": 11500.0}})
     client.post(f"{DF}/documents/{d3}/review", json={"reviewer": "qa", "action": "invalid"})
     assert wait_for(emitted, "approved")[0]["document_id"] == d2 and wait_for(emitted, "approved")[0]["status"] == "validated"
