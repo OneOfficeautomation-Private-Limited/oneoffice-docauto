@@ -11,13 +11,13 @@ import threading
 
 import numpy as np
 
+from docauto import languages
 from docauto.errors import ProviderError
 from docauto.models import DocumentResult, Line, Page
 from docauto.normalize import detect_direction, polygon_to_bbox
 from docauto.provider import HealthStatus, OcrProvider, RecognizeRequest
 
-LANG_MAP = {"en": "en", "ar": "arabic", "fr": "fr", "de": "german", "zh": "ch", "es": "es", "it": "it",
-            "pt": "pt", "ru": "ru", "hi": "hi", "ur": "ur", "fa": "fa"}
+LANG_MAP = languages.PADDLE   # "en" -> "en", "ar" -> "arabic", "zh" -> "ch", ...
 
 
 class PaddleOcrProvider(OcrProvider):
@@ -26,9 +26,14 @@ class PaddleOcrProvider(OcrProvider):
             import paddleocr  # noqa: F401
             self._engines = {}
             self._lock = threading.Lock()   # one engine object is not safe across worker threads
+            self.info.languages = list(dict.fromkeys([*(getattr(self.info, "languages", None) or []), *self.installed_languages()]))
             return HealthStatus(True, "paddleocr installed")
         except Exception as e:
             return HealthStatus(False, f"paddleocr not installed: {e}")
+
+    def installed_languages(self) -> list[str]:
+        """The languages PaddleOCR reads (its models download the first time a language is used), as codes."""
+        return list(LANG_MAP)
 
     def _engine(self, lang: str):
         from paddleocr import PaddleOCR

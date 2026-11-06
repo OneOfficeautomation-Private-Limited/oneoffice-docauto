@@ -385,13 +385,15 @@ class Store:
         pages = self._one(f"SELECT COALESCE(SUM(u.pages),0) p, COALESCE(SUM(u.credits),0) cr FROM usage u "
                           f"JOIN documents d ON d.id=u.document_id {where.replace(" AND COALESCE(status,'')<>'split'", '').replace('instance_id', 'd.instance_id')} "
                           f"AND u.capability IN ('ocr_printed','tables','ocr_handwriting','layout','key_value')", args)
+        month = self._one(f"SELECT COUNT(*) n FROM documents {where} AND created_at >= ?",
+                          (*args, datetime.now(timezone.utc).strftime("%Y-%m-01")))
         done = sum(by.get(k, 0) for k in ("success", "validation", "validated", "invalid"))
         fields, corrected = (agg["f"] or 0), (agg["c"] or 0)
         return {"byStatus": {k: by.get(k, 0) for k in self.DOC_STATUSES}, "total": sum(by.values()),
                 "processed": done, "stpRate": round(by.get("success", 0) / done, 4) if done else None,
                 "fieldAccuracy": round(1 - corrected / fields, 4) if fields else None,
                 "avgProcessingMs": int(agg["ms"]) if agg["ms"] else None, "pages": pages["p"],
-                "credits": pages["cr"], "daily": daily}
+                "credits": pages["cr"], "daily": daily, "thisMonth": month["n"]}
 
     def month_usage(self, since_iso: str) -> dict:
         """Pages read and credits of documents in processes since a date (the overview's "this month")."""

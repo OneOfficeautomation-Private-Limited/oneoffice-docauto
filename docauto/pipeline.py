@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from . import barcodes, einvoice, pii
+from . import barcodes, einvoice, pii, tables
 from .builtin import PDF_TEXT_INFO, PdfTextProvider
 from .config import load_config
 from .errors import DocAutoError, InvalidInput, UnsupportedCapability
@@ -439,6 +439,10 @@ class DocumentService:
         self._postprocess_lines(result)
         if not opt.includeRaw:
             result.raw = None
+        # line-item tables: rebuilt from the words' layout when the engine does not read tables (Tesseract, PaddleOCR)
+        reader = self.registry.get(used)
+        if schema and not (reader and Capability.TABLES in reader.info.capabilities):
+            tables.add_line_tables(result, schema)
 
         # QR codes: asked for (barcodes), or an e-invoice QR that cross-checks the extracted fields
         qr = None
@@ -481,6 +485,7 @@ class DocumentService:
             # plain OCR: only flag review if the caller asked for extraction
             result.review.required = False
             result.review.status = ReviewStatus.not_required
+            result.review.reasons = []
             result.warnings = [w for w in result.warnings if not w.startswith("document confidence")]
         self.store.save_result(result, schema.id if schema else None)
         return result

@@ -9,6 +9,9 @@ from docauto import events, outbox
 
 DF = "/api/docs/v1/df"
 PDF = (SAMPLES / "invoice_digital.pdf").read_bytes()
+# the sample's supplier is the unlabelled company line at the top, read at <= 75% so a person checks it; these
+# processes accept it, so the invoice goes straight through
+AUTO = {"fieldThresholds": {"supplier_name": 0.7}}
 
 
 class Resp:
@@ -94,7 +97,7 @@ def wait_for(got, event, timeout=8):
 
 
 def test_processed_review_and_decisions(client, emitted):
-    fid = client.post(f"{DF}/flows", json={"name": "AP invoices", "docTypes": ["invoice"]}).json()["id"]
+    fid = client.post(f"{DF}/flows", json={"name": "AP invoices", "docTypes": ["invoice"], "review": AUTO}).json()["id"]
     d1 = up(client, fid)
     ev = wait_for(emitted, "processed")[0]
     assert ev["document_id"] == d1 and ev["process_id"] == fid and ev["process"] == "AP invoices"
@@ -146,7 +149,7 @@ def test_outbox_sends_each_event_once_and_survives_a_restart(client, monkeypatch
     monkeypatch.setattr(events, "send", send)
     df = appmod.docflow()
     df.outbox.stop()                                   # the service "stops" with the event still queued
-    fid = client.post(f"{DF}/flows", json={"name": "AP", "docTypes": ["invoice"]}).json()["id"]
+    fid = client.post(f"{DF}/flows", json={"name": "AP", "docTypes": ["invoice"], "review": AUTO}).json()["id"]
     up(client, fid)
     pending = df.store.outbox_list("pending")
     assert [p["name"] for p in pending] == ["processed"]
@@ -168,7 +171,7 @@ def test_status_change_and_its_event_commit_together(client, emitted, monkeypatc
     """A listener's outbox item is written in the transaction of the status change: a failure rolls both back."""
     import docauto.api.app as appmod
     svc = appmod.service()
-    fid = client.post(f"{DF}/flows", json={"name": "AP", "docTypes": ["invoice"]}).json()["id"]
+    fid = client.post(f"{DF}/flows", json={"name": "AP", "docTypes": ["invoice"], "review": AUTO}).json()["id"]
     doc = up(client, fid)
     before = len(svc.store.outbox_list())
     with pytest.raises(RuntimeError):
@@ -185,7 +188,7 @@ def test_deliveries_retry_with_backoff_and_are_logged_once(client, monkeypatch):
     codes, posted = [503, 500, 200], []
     monkeypatch.setattr(dfm.httpx, "post", lambda url, json=None, headers=None, timeout=None:
                         posted.append(json) or Resp(codes.pop(0) if codes else 200))
-    fid = client.post(f"{DF}/flows", json={"name": "ERP", "docTypes": ["invoice"], "deliveries": [
+    fid = client.post(f"{DF}/flows", json={"name": "ERP", "docTypes": ["invoice"], "review": AUTO, "deliveries": [
         {"type": "webhook", "name": "ERP", "params": {"url": "http://erp.local/hook"}}]}).json()["id"]
     doc = up(client, fid)
     end = time.time() + 10
@@ -204,7 +207,7 @@ def test_a_refused_delivery_fails_without_retrying(client, emitted, monkeypatch)
     import docauto.docflow as dfm
     posted = []
     monkeypatch.setattr(dfm.httpx, "post", lambda *a, **k: posted.append(1) or Resp(400))
-    fid = client.post(f"{DF}/flows", json={"name": "ERP", "docTypes": ["invoice"], "deliveries": [
+    fid = client.post(f"{DF}/flows", json={"name": "ERP", "docTypes": ["invoice"], "review": AUTO, "deliveries": [
         {"type": "webhook", "name": "ERP", "params": {"url": "http://erp.local/hook"}}]}).json()["id"]
     up(client, fid)
     assert wait_for(emitted, "delivery_failed")[0]["status"] == "success"

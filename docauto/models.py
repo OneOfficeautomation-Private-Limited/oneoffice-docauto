@@ -155,11 +155,27 @@ class ReviewStatus(str, Enum):
     rejected = "rejected"
 
 
+class ReviewReason(BaseModel):
+    """Why a document goes to review, in plain words (docauto.scoring decides; DocFlow adds its rules).
+
+    field: the field concerned, None for the whole document. reason: low_confidence | required_missing |
+    validation | not_grounded | check_failed | document_confidence | rule | unclassified. threshold/confidence:
+    0-1, for the confidence reasons. fields: the fields a failed check names."""
+    field: Optional[str] = None
+    reason: str
+    message: str = ""
+    threshold: Optional[float] = None
+    confidence: Optional[float] = None
+    fields: list[str] = Field(default_factory=list)
+    rule: Optional[str] = None
+
+
 class Review(BaseModel):
     required: bool = False
     status: ReviewStatus = ReviewStatus.not_required
     reviewer: Optional[str] = None
     completedAt: Optional[datetime] = None
+    reasons: list[ReviewReason] = Field(default_factory=list)
 
 
 class ProvenanceStep(BaseModel):
@@ -226,6 +242,9 @@ class FieldDef(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     columns: list["FieldDef"] = Field(default_factory=list)
     confidenceThreshold: Optional[float] = None
+    # rules extractor: where to look when no label is printed. "header_company": the company name at the top of
+    # page 1 (the issuer of an invoice or receipt), at modest confidence so a person checks it
+    fallback: Optional[Literal["header_company"]] = None
 
 
 class FieldSchema(BaseModel):

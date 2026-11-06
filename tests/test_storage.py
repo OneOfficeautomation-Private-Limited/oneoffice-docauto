@@ -223,3 +223,26 @@ def test_sqlite_install_is_copied_to_postgres_once_per_tenant(tmp_path):
     store.delivery_log("ap", "d1", "ERP", "webhook", True, "HTTP 200")                  # ids continue after the copy
     assert [d["id"] for d in store.delivery_list("ap")] == [2, 1]
     assert migrate_sqlite.main([str(base), "--dry-run"]) == 0
+
+
+def test_embedded_server_waits_while_postgres_recovers(monkeypatch):
+    """After a crash PostgreSQL recovers before it accepts connections; pgserver gives up after 10 s, DocFlow retries."""
+    import subprocess
+
+    calls = []
+
+    class FakePgserver:
+        @staticmethod
+        def get_server(pgdata, cleanup_mode):
+            calls.append(pgdata)
+            if len(calls) < 3:
+                raise subprocess.TimeoutExpired("pg_ctl", 10)
+            return "server"
+
+    monkeypatch.setattr(db.time, "sleep", lambda s: None)
+    assert db._start_embedded(FakePgserver, "pgdata") == "server"
+    assert len(calls) == 3
+    monkeypatch.setenv("DOCAUTO_DB_START_TIMEOUT", "0")
+    calls.clear()
+    with pytest.raises(subprocess.TimeoutExpired):
+        db._start_embedded(FakePgserver, "pgdata")

@@ -1,7 +1,10 @@
 """Built-in, offline extraction + classification (no AI required).
 
-Strategy per field: key-value pairs -> 'Label: value' lines -> regex.
-Tier 3 (LLM) extractors plug in through the same ExtractionProvider contract.
+Strategy per field: key-value pairs -> regex -> 'Label: value' lines -> (optional) a fallback
+that needs no label, e.g. the company name at the top of an invoice (FieldDef.fallback).
+A value's OCR confidence is the confidence of the words that print the value, not of
+the whole line: a poorly read label ('Subtotal:' at 0%) does not make a clearly read
+amount doubtful. Tier 3 (LLM) extractors plug in through the same ExtractionProvider contract.
 """
 from __future__ import annotations
 
@@ -11,7 +14,7 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
-from .models import Classification, DocumentResult, ExtractedField, FieldDef, FieldSchema, Line
+from .models import Classification, DocumentResult, ExtractedField, FieldDef, FieldSchema, Line, Page
 from .provider import Capability, ExtractionProvider, ExtractRequest, ProviderInfo
 
 _NUM = re.compile(r"[-+]?\d[\d,\s]*(?:[.,]\d+)*")
@@ -83,6 +86,44 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s:_\-#.]+", " ", s.lower()).strip()
 
 
+def label_matches(text: str, label: str) -> bool:
+    """A printed caption (a table header cell) is this label: the same words, or a small OCR slip ('Descriptlon')."""
+    a, b = _norm(text), _norm(label)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    from difflib import SequenceMatcher
+    return len(b) >= 5 and SequenceMatcher(None, a, b).ratio() >= 0.85
+
+
+def span_confidence(page: Page, line: Line, start: int, end: int) -> Optional[float]:
+    """Mean OCR confidence of the words printing line.text[start:end] (the value, not its label). The line's own
+    confidence when its words are not known or do not spell the line text."""
+    words = [page.words[i] for i in line.wordIndexes if i < len(page.words)]
+    if not words or " ".join(w.text for w in words) != line.text:
+        return line.confidence
+    pos, confs = 0, []
+    for w in words:
+        s, e = pos, pos + len(w.text)
+        pos = e + 1
+        if e > start and s < end and w.confidence is not None:
+            confs.append(w.confidence)
+    return round(sum(confs) / len(confs), 4) if confs else line.confidence
+
+
+# the company name printed at the top of a page (FieldDef.fallback = "header_company")
+_COMPANY = re.compile(r"(?i)(?<![\w])(?:llc|l\.l\.c\.?|ltd\.?|limited|co\.?|company|corp\.?|corporation|inc\.?|est\.?|"
+                      r"establishment|trading|group|holding|industries|enterprises|gmbh|plc|llp|w\.?l\.?l\.?|fze|fzco|"
+                      r"pvt\.?)(?![\w])|شركة|مؤسسة|مجموعة|المحدودة|للتجارة")
+_TITLE = re.compile(r"(?i)\b(?:tax\s+)?invoice\b|\breceipt\b|\bpurchase\s+order\b|\bcredit\s+note\b|\bdebit\s+note\b|"
+                    r"\bquotation\b|\bstatement\b|\bdelivery\s+note\b|فاتورة|إيصال|ايصال|أمر\s+شراء|إشعار")
+_NOT_NAME = re.compile(r"(?i)@|www\.|https?:|\.com\b|\b(?:tel|phone|fax|mobile|e-?mail|p\.?\s?o\.?\s?box|street|st\.|road|"
+                       r"rd\.|building|floor|district|city|vat|trn|page)\b|هاتف|جوال|ص\.?\s?ب|شارع|الرقم الضريبي|سجل")
+HEADER_TOP = 0.3          # the company line sits in the top 30% of page 1
+HEADER_CONFIDENCE = 0.75  # at most: a guess from layout, so a person checks it unless e-invoice data confirms it
+
+
 def _find_label(text: str, label: str) -> Optional[tuple[int, int, bool]]:
     """Locate a label in a line as a whole word/phrase. Returns (start, end, fuzzy) or None."""
     pat = re.compile(r"(?<![\w])" + re.escape(label) + r"(?![\w])", re.IGNORECASE)
@@ -136,7 +177,11 @@ class RulesExtractor(ExtractionProvider):
                 val, ok = coerce(raw, f.type, f.format)
                 if ok:
                     page, line = self._locate(doc, raw)
-                    return self._field(f, val, raw, line.confidence if line else None, page,
+                    conf = None
+                    if line:
+                        at = line.text.find(raw)
+                        conf = span_confidence(page, line, at, at + len(raw))
+                    return self._field(f, val, raw, conf, page.pageNumber if page else None,
                                        line.bbox if line else None, 0.9)
             # OCR often splits long numbers with a space ("35075291 7034233"): retry per line without them
             for p in doc.pages:
@@ -167,13 +212,17 @@ class RulesExtractor(ExtractionProvider):
             if colon and re.search(r"[A-Za-z\u0600-\u06FF]{2,}", rest[:colon.start()]):
                 continue  # the printed label is longer ("Supplier VAT No:" is not "Supplier:")
             after = rest.lstrip(" :：#-\t")
-            candidates = [after] if after else []
+            candidates = []   # (text, OCR confidence of the value's words, where it is)
+            if after:
+                at = len(line.text) - len(after)
+                candidates.append((after, span_confidence(p, line, at, len(line.text)), line.bbox))
             if i + 1 < len(p.lines):
-                candidates.append(p.lines[i + 1].text)
-            for c in candidates:
+                nxt = p.lines[i + 1]
+                candidates.append((nxt.text, nxt.confidence, nxt.bbox))
+            for c, conf, box in candidates:
                 val, ok = coerce(c, f.type, f.format)
                 if ok and (f.type != "enum" or not f.enumValues or val in f.enumValues):
-                    return self._field(f, val, c, line.confidence, p.pageNumber, line.bbox, 0.75 if fuzzy else 0.9)
+                    return self._field(f, val, c, conf, p.pageNumber, box, 0.75 if fuzzy else 0.9)
         # 4) enum without a label: a single allowed value printed anywhere (e.g. "Total: 11,500.00 SAR")
         if f.type == "enum" and f.enumValues:
             hits = {}
@@ -185,6 +234,15 @@ class RulesExtractor(ExtractionProvider):
             if len(hits) == 1:
                 v, (p, line) = next(iter(hits.items()))
                 return self._field(f, v, line.text, line.confidence, p.pageNumber, line.bbox, 0.88)
+        # 5) no label printed: a fallback the document type asks for
+        if f.fallback == "header_company" and f.type == "string":
+            hit = header_company(doc)
+            if hit:
+                p, line = hit
+                conf = HEADER_CONFIDENCE * (line.confidence if line.confidence is not None else 0.9)
+                return ExtractedField(name=f.name, type=f.type, value=line.text.strip(), rawText=line.text,
+                                      confidence=round(conf, 4), page=p.pageNumber, bbox=line.bbox,
+                                      providerId=self.info.id)
         return ExtractedField(name=f.name, type=f.type, value=None, confidence=0.0, providerId=self.info.id)
 
     def _table(self, doc: DocumentResult, f: FieldDef) -> ExtractedField:
@@ -194,13 +252,12 @@ class RulesExtractor(ExtractionProvider):
                 grid = t.to_matrix()
                 if not grid:
                     continue
-                header = [_norm(h) for h in grid[0]]
                 mapping = {}
                 for c in f.columns:
-                    for lbl in _labels(c):
-                        if _norm(lbl) in header:
-                            mapping[c.name] = header.index(_norm(lbl))
-                            break
+                    at = next((k for lbl in _labels(c) for k, h in enumerate(grid[0])
+                               if k not in mapping.values() and label_matches(h, lbl)), None)
+                    if at is not None:
+                        mapping[c.name] = at
                 if not mapping:
                     continue
                 rows = []
@@ -215,11 +272,11 @@ class RulesExtractor(ExtractionProvider):
                                       rawText=f"{len(rows)} rows; columns {list(mapping)} of {col_names}")
         return ExtractedField(name=f.name, type="table", value=[], confidence=0.0, providerId=self.info.id)
 
-    def _locate(self, doc: DocumentResult, raw: str) -> tuple[Optional[int], Optional[Line]]:
+    def _locate(self, doc: DocumentResult, raw: str) -> tuple[Optional[Page], Optional[Line]]:
         for p in doc.pages:
             for l in p.lines:
                 if raw in l.text:
-                    return p.pageNumber, l
+                    return p, l
         return None, None
 
     def _field(self, f, val, raw, ocr_conf, page, bbox, strategy_conf) -> ExtractedField:
@@ -239,6 +296,38 @@ class RulesExtractor(ExtractionProvider):
         cands = [{"label": l, "confidence": round(s / total, 4)} for l, s in scores]
         best = cands[0] if scores and scores[0][1] > 0 else {"label": "other", "confidence": 0.0}
         return Classification(label=best["label"], confidence=best["confidence"], candidates=cands)
+
+
+def header_company(doc: DocumentResult) -> Optional[tuple[Page, Line]]:
+    """The company name printed as the heading of page 1 (an invoice's issuer), or None.
+
+    Looks only above the title ('Tax Invoice', 'فاتورة', 'Receipt'...) or, without a title, at the first lines in the
+    top of the page, and stops at the first labelled line ('X: ...'). A candidate is mostly letters: no date, amount
+    or ID, no address or contact line. The most prominent wins: a company suffix (LLC, Ltd, Co., Est., Trading,
+    شركة, مؤسسة...), then the tallest text, then the topmost. Without a suffix only the first heading line is taken."""
+    page = next((p for p in doc.pages if p.lines), None)
+    if page is None:
+        return None
+    cands = []
+    for l in sorted((l for l in page.lines if l.bbox.y < HEADER_TOP), key=lambda l: (l.bbox.y, l.bbox.x)):
+        t = l.text.strip()
+        if re.search(r"[:：]", t):
+            break               # labelled data starts: the heading is over
+        if _TITLE.search(t):
+            if cands:
+                break           # the issuer's name is printed above the document title
+            continue
+        letters, digits = sum(ch.isalpha() for ch in t), sum(ch.isdigit() for ch in t)
+        if (letters < 3 or digits > 2 or letters < 0.6 * len(t.replace(" ", "")) or len(t.split()) > 8
+                or _NOT_NAME.search(t)):
+            continue
+        cands.append(l)
+    if not cands:
+        return None
+    best = max(cands, key=lambda l: (bool(_COMPANY.search(l.text)), round(l.bbox.h, 3), -l.bbox.y))
+    if not _COMPANY.search(best.text) and best is not cands[0]:
+        return None
+    return page, best
 
 
 RULES_INFO = ProviderInfo(

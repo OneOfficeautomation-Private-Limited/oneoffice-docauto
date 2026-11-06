@@ -153,6 +153,7 @@ def get_fields(doc_id: str, _: str = Depends(auth)):
         raise HTTPException(404, "result not available")
     from ..grounding import locations
     return {"documentId": doc_id, "reviewRequired": res.review.required, "reviewStatus": res.review.status,
+            "reviewReasons": [r.model_dump() for r in res.review.reasons],
             "fields": {f.name: f.value for f in res.fields},
             "confidence": {f.name: f.confidence for f in res.fields},
             "locations": locations(res)}
@@ -556,6 +557,16 @@ def df_update_doctype(dt_id: str, body: dict[str, Any], _: str = Depends(auth)):
 def df_delete_doctype(dt_id: str, _: str = Depends(auth)):
     docflow().delete_doctype(dt_id)
     return {"deleted": dt_id}
+
+
+@app.get(f"{DF}/languages")
+def df_languages(_: str = Depends(auth)):
+    """The languages document types can use: [{code, name, engines, installed, offered}]. engines: the OCR engines
+    here that read it (Tesseract: its installed language data; PaddleOCR: its supported set, when installed);
+    offered: on the administrator's list (DOCAUTO_OFFERED_LANGUAGES, changed through /admin/settings)."""
+    from .. import languages
+    svc = service()
+    return languages.describe(svc.config, svc.registry)
 
 
 @app.post(f"{DF}/doctypes/suggest")

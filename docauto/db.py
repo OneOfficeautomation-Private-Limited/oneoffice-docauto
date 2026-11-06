@@ -43,9 +43,25 @@ def embedded_url(pgdata: str | Path) -> str:
             Path(key).mkdir(parents=True, exist_ok=True)
             _prune_handles(Path(key))
             log.info("starting the embedded PostgreSQL server in %s", key)
-            srv = _servers[key] = pgserver.get_server(key, cleanup_mode="stop")
+            srv = _servers[key] = _start_embedded(pgserver, key)
     _ensure_database(srv.get_uri(), EMBEDDED_DB)
     return srv.get_uri(database=EMBEDDED_DB)
+
+
+def _start_embedded(pgserver, pgdata: str):
+    """pgserver gives the server 10 s to start. After a crash or power cut PostgreSQL first recovers, which can take
+    longer; it keeps starting in the background, so wait for it (DOCAUTO_DB_START_TIMEOUT, default 180 s)."""
+    import subprocess
+    deadline = time.monotonic() + float(os.environ.get("DOCAUTO_DB_START_TIMEOUT", "180"))
+    while True:
+        try:
+            return pgserver.get_server(pgdata, cleanup_mode="stop")
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
+            if time.monotonic() >= deadline:
+                raise
+            log.warning("the embedded PostgreSQL server is not ready yet (%s); it may be recovering, retrying",
+                        type(e).__name__)
+            time.sleep(3)
 
 
 def _prune_handles(pgdata: Path) -> None:

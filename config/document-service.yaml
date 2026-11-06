@@ -94,6 +94,9 @@ storage:
   database_url: ${DOCAUTO_DATABASE_URL:-}         # postgresql://user:pass@host:5432/db; empty = embedded server in <data_dir>/postgres
   retention_days: ${DOCAUTO_RETENTION_DAYS:-30}   # documents older than this are deleted daily (0 = keep forever)
 
+languages:
+  offered: ${DOCAUTO_OFFERED_LANGUAGES:-en,ar}   # the languages offered for document types (codes, comma separated)
+
 privacy:
   mask_pii: ${DOCAUTO_MASK_PII:-true}   # mask IDs, IBANs, phones and e-mails before cloud AI models (never for local ones)
 

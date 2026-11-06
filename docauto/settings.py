@@ -52,6 +52,10 @@ DEFAULTS = [
      "help": "National ID / Iqama numbers, IBANs, phone numbers and e-mails are replaced by placeholders before text "
              "goes to a cloud AI model, and restored in the results. Page images cannot be masked: with this on they "
              "are only sent when a process allows images. Local engines are never masked."},
+    {"key": "DOCAUTO_OFFERED_LANGUAGES", "label": "Languages offered for document types", "type": "text",
+     "default": "en,ar", "help": "Language codes, comma separated (en, ar, ur, hi, fr, zh...). People choose a "
+                                 "document type's languages from these; GET /df/languages lists what the OCR "
+                                 "engines here can read."},
 ]
 PACKS = {
     "tier1_opensource": {"key": "DOCAUTO_PACK_OPENSOURCE", "title": "OneCore · Open source",

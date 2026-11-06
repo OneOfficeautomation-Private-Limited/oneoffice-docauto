@@ -38,8 +38,9 @@ from . import einvoice, events, outbox, pii
 from .errors import DocAutoError, InvalidInput
 from .extraction import coerce, safe_eval
 from .grounding import locations
-from .models import DocumentResult, ExtractedField, FieldDef, FieldSchema, ReviewStatus
+from .models import DocumentResult, ExtractedField, FieldDef, FieldSchema, ReviewReason, ReviewStatus
 from .pipeline import DocumentService, ProcessOptions
+from .scoring import review_reasons
 
 log = logging.getLogger("docauto.docflow")
 SUPPORTED_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp", ".xml"}
@@ -176,8 +177,11 @@ class Flow(BaseModel):
 
 
 # ================================================================== doc type library
-def _f(name, type_="string", label=None, required=False, aliases=None, regex=None, fmt=None, enum=None, columns=None):
+def _f(name, type_="string", label=None, required=False, aliases=None, regex=None, fmt=None, enum=None, columns=None,
+       fallback=None):
     d = {"name": name, "type": type_, "label": label, "required": required, "aliases": aliases or []}
+    if fallback:
+        d["fallback"] = fallback
     if regex:
         d["regex"] = regex
     if fmt:
@@ -190,8 +194,10 @@ def _f(name, type_="string", label=None, required=False, aliases=None, regex=Non
 
 
 LINE_ITEMS = _f("line_items", "table", "Line items", columns=[
-    _f("description", label="Description"), _f("quantity", "number", "Qty"),
-    _f("unit_price", "currency", "Unit Price"), _f("amount", "currency", "Amount")])
+    _f("description", label="Description / الوصف", aliases=["Item", "Items", "Details", "Particulars", "البيان", "الصنف"]),
+    _f("quantity", "number", "Qty / الكمية", aliases=["Quantity", "Qty."]),
+    _f("unit_price", "currency", "Unit Price / سعر الوحدة", aliases=["Price", "Rate", "Unit Cost", "السعر"]),
+    _f("amount", "currency", "Amount / المبلغ", aliases=["Line Total", "Net Amount", "Total", "الإجمالي"])])
 
 LIBRARY: dict[str, dict[str, Any]] = {
     "invoice": {"name": "Invoice", "description": "Supplier / tax invoices (VAT), English and Arabic.",
@@ -200,7 +206,7 @@ LIBRARY: dict[str, dict[str, Any]] = {
                     _f("invoice_number", label="Invoice Number / رقم الفاتورة", required=True, aliases=["Invoice No", "Bill No"]),
                     _f("invoice_date", "date", "Invoice Date / تاريخ الفاتورة", True, ["Date", "Issue Date"]),
                     _f("due_date", "date", "Due Date / تاريخ الاستحقاق"),
-                    _f("supplier_name", label="Supplier / المورد", aliases=["Vendor", "Seller"]),
+                    _f("supplier_name", label="Supplier / المورد", aliases=["Vendor", "Seller"], fallback="header_company"),
                     _f("supplier_vat", label="Supplier VAT No / الرقم الضريبي", aliases=["VAT Number", "VAT No", "TRN"],
                        regex=r"3\d{14}"),
                     _f("customer_name", label="Customer / العميل", aliases=["Bill To", "Buyer"]),
@@ -222,7 +228,7 @@ LIBRARY: dict[str, dict[str, Any]] = {
                        "checks": []},
     "receipt": {"name": "Receipt", "description": "Retail / expense receipts.",
                 "keywords": ["receipt", "إيصال", "cashier", "thank you"],
-                "fields": [_f("merchant_name", label="Merchant / التاجر", aliases=["Store"]),
+                "fields": [_f("merchant_name", label="Merchant / التاجر", aliases=["Store"], fallback="header_company"),
                            _f("receipt_date", "date", "Date / التاريخ", True),
                            _f("vat_amount", "currency", "VAT / الضريبة", aliases=["Tax"]),
                            _f("total", "currency", "Total / الإجمالي", True, ["Amount", "Total Paid"]),
@@ -300,6 +306,8 @@ def run_rules(store, flow: Flow, doctype: Optional[DocType], doc_id: str, result
                                     if by[target].value in (None, ""):
                                         by[target].value, by[target].confidence = row[src], 1.0
                                         by[target].providerId = f"lookup:{table}"
+                                    elif _same_text(by[target].value, row[src]) and by[target].validation.passed:
+                                        by[target].confidence = 1.0   # the reference data confirms what was read
                                 else:
                                     nf = ExtractedField(name=target, value=row[src], confidence=1.0,
                                                         providerId=f"lookup:{table}")
@@ -337,6 +345,30 @@ def run_rules(store, flow: Flow, doctype: Optional[DocType], doc_id: str, result
             flag(r, f"Rule could not run: {type(e).__name__}: {e}")
             flags[-1]["action"] = "review"
     return flags
+
+
+def _same_text(a: Any, b: Any) -> bool:
+    return re.sub(r"\s+", " ", str(a)).strip().casefold() == re.sub(r"\s+", " ", str(b)).strip().casefold()
+
+
+UNCLASSIFIED = ReviewReason(reason="unclassified", message="The document type was not recognised: choose it")
+
+
+def _flag_reasons(flags: list[dict]) -> list[ReviewReason]:
+    """The process's rules that sent the document to review (or rejected it), as review reasons."""
+    return [ReviewReason(field=f.get("field"), reason="rule", rule=f.get("rule"), message=f.get("message", ""))
+            for f in flags if f.get("action") != "warn"]
+
+
+def _merge_reasons(*groups: list[ReviewReason]) -> list[ReviewReason]:
+    """Reasons in order, each once (a rule's message is also the field's validation error)."""
+    out, seen = [], set()
+    for r in (r for g in groups for r in g):
+        k = (r.field, r.message.casefold())
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out
 
 
 class RefData:
@@ -586,6 +618,9 @@ class DocFlowService:
                 self.save_doctype(DocType(id=cat, name=lib["name"], description=lib["description"], category=cat,
                                           keywords=lib["keywords"], checks=lib["checks"],
                                           fields=[FieldDef.model_validate(f) for f in lib["fields"]]), new=True)
+        elif not self.store.meta_get("df.library.fallbacks"):
+            self._upgrade_fallbacks()
+        self.store.meta_set("df.library.fallbacks", "1")
         raw = self.store.df_get("flow", INBOX_ID)
         if raw:
             inbox = Flow.model_validate_json(raw)
@@ -596,6 +631,21 @@ class DocFlowService:
             self.save_flow(Flow(id=INBOX_ID, name="One Inbox", isInbox=True, status="live",
                                 description="Drop any document: it is recognised, split and extracted automatically.",
                                 classify=ClassifySettings(mode="auto", split=True)), new=True)
+
+    def _upgrade_fallbacks(self) -> None:
+        """Once: built-in document types seeded before field fallbacks existed get the library's (the invoice
+        supplier and receipt merchant read from the page heading). A fallback set or removed later is kept."""
+        for cat, lib in LIBRARY.items():
+            raw = self.store.df_get("doctype", cat)
+            if not raw:
+                continue
+            dt, changed = DocType.model_validate_json(raw), False
+            for f in dt.fields:
+                want = next((x.get("fallback") for x in lib["fields"] if x["name"] == f.name), None)
+                if want and f.fallback is None and f.type == "string":
+                    f.fallback, changed = want, True
+            if changed:
+                self.save_doctype(dt)
 
     # ---------------------------------------------------------------- doc types
     def doctypes(self) -> list[DocType]:
@@ -786,21 +836,31 @@ class DocFlowService:
         if dt is None:
             result.review.required, result.review.status = True, ReviewStatus.pending
             result.warnings.append("Unclassified: choose the document type in One Desk")
+            result.review.reasons = _merge_reasons(result.review.reasons, [UNCLASSIFIED])
             self.store.save_result(result)
             self.store.set_doc_fields(doc_id, flags=json.dumps([{"rule": "classification", "type": "classify",
                                                                  "action": "review", "message": "Document type not recognised"}]))
             return "validation"
         flags = run_rules(self.store, fl, dt, doc_id, result, RefData(self.store))
         self.store.set_doc_fields(doc_id, flags=json.dumps(flags, ensure_ascii=False))
+        # the scorer's decision again, now that lookups may have filled or confirmed values (it changes nothing)
+        ft, dtt = self.svc._thresholds(opt)
+        reasons = _merge_reasons(_flag_reasons(flags), review_reasons(result, opt.schema_ or dt.schema(), ft, dtt,
+                                                                      opt.fieldThresholds))
+        result.review.reasons = reasons
         new = status
         if any(f["action"] == "reject" for f in flags):
             new = "invalid"
-        elif any(f["action"] == "review" for f in flags) and status == "success":
+        elif reasons and status == "success":
             new = "validation"
+        elif not reasons and status == "validation":
+            new = "success"     # reference data confirmed the only doubtful values
+            result.review.required, result.review.status = False, ReviewStatus.not_required
+            result.warnings = [w for w in result.warnings if not w.endswith("needs review")]
         if flags:
             result.warnings.extend(f"{f['rule']}: {f['message']}" for f in flags if f["action"] != "warn")
-            if new == "validation":
-                result.review.required, result.review.status = True, ReviewStatus.pending
+        if new == "validation":
+            result.review.required, result.review.status = True, ReviewStatus.pending
         self.store.save_result(result)  # also persists lookup enrichment
         return new
 
@@ -840,9 +900,27 @@ class DocFlowService:
         row["confidence"] = {f.name: f.confidence for f in res.fields} if res else {}
         row["locations"] = locations(res) if res else {}      # where each value is on the pages (review highlight)
         row["einvoice"] = res.einvoice if res else None       # e-invoice XML / QR data and its checks
+        row["reviewReasons"] = [r.model_dump() for r in self._review_reasons(res, row)] if res else []
         row["children"] = self.store.children(doc_id) if row["status"] == "split" else []
         row["error"] = self.store.last_job_error(doc_id)
         return row
+
+    def _review_reasons(self, res: DocumentResult, row: dict) -> list[ReviewReason]:
+        """Why the document went to review. A result read before the reasons were kept is stated again by the
+        scorer (docauto.scoring.review_reasons, which changes nothing) with its process's thresholds and rules."""
+        if res.review.reasons or not res.review.required:
+            return res.review.reasons
+        flags = row.get("flags") or []
+        try:
+            fl = self.flow(row["flowId"]) if row.get("flowId") else None
+            dt = self.doctype(row["doctype_id"]) if row.get("doctype_id") else None
+        except InvalidInput:
+            fl = dt = None
+        if dt is None:
+            return _merge_reasons([UNCLASSIFIED], _flag_reasons(flags))
+        rv = fl.review if fl else ReviewSettings()
+        return _merge_reasons(_flag_reasons(flags), review_reasons(res, dt.schema(), rv.fieldConfidence,
+                                                                   rv.documentConfidence, rv.fieldThresholds))
 
     def review(self, doc_id: str, fields: dict, reviewer: str, action: str = "submit") -> dict:
         row = self.store.doc_row(doc_id)

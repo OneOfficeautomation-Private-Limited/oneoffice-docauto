@@ -3,17 +3,17 @@ from __future__ import annotations
 
 import io
 
+from docauto import languages
 from docauto.errors import ProviderError, ProviderUnavailable
 from docauto.models import DocumentResult, Line, Page, Word
 from docauto.normalize import bbox_from_pixels, conf100, detect_direction, union_bbox
 from docauto.provider import HealthStatus, OcrProvider, RecognizeRequest
 
-LANG_MAP = {"en": "eng", "ar": "ara", "fr": "fra", "de": "deu", "hi": "hin", "ur": "urd", "fa": "fas",
-            "zh": "chi_sim", "es": "spa", "it": "ita", "pt": "por", "ru": "rus", "tr": "tur"}
+LANG_MAP = languages.TESSERACT   # "en" -> "eng", "ar" -> "ara", "zh" -> "chi_sim", ...
 
 
 def tess_langs(langs: list[str]) -> str:
-    return "+".join(dict.fromkeys(LANG_MAP.get(l, l) for l in (langs or ["en"])))
+    return "+".join(dict.fromkeys(languages.tesseract_code(l) for l in (langs or ["en"])))
 
 
 def _merge_rows(page: Page, max_gap: float = 0.25) -> list[Line]:
@@ -59,9 +59,18 @@ class TesseractProvider(OcrProvider):
                 pytesseract.pytesseract.tesseract_cmd = cmd
             v = pytesseract.get_tesseract_version()
             self.installed_langs = set(pytesseract.get_languages(config=""))
+            # the router offers this engine for every language whose data is installed, not only the manifest's
+            self.info.languages = list(dict.fromkeys([*(getattr(self.info, "languages", None) or []), *self.installed_languages()]))
             return HealthStatus(True, f"tesseract {v}; langs: {len(self.installed_langs)}")
         except Exception as e:
             return HealthStatus(False, f"tesseract not available: {e}")
+
+    def installed_languages(self, fresh: bool = False) -> list[str]:
+        """The languages whose data is installed (`tesseract --list-langs`, with TESSDATA_PREFIX), as codes."""
+        if fresh or not hasattr(self, "installed_langs"):
+            import pytesseract
+            self.installed_langs = set(pytesseract.get_languages(config=""))
+        return [c for c in dict.fromkeys(languages.from_tesseract(t) for t in sorted(self.installed_langs)) if c]
 
     def _check_langs(self, langs: list[str]) -> str:
         code = tess_langs(langs)

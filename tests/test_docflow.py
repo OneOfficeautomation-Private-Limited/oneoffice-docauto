@@ -110,7 +110,7 @@ def test_flow_rules_lookups_and_deliveries(client, tmp_path, monkeypatch):
     d1 = up(client, fid, pdf([INV]))
     doc1 = client.get(f"{DF}/documents/{d1['documentId']}").json()
     assert doc1["status"] == "success", doc1["flags"]
-    assert doc1["fields"]["supplier_name"] == "ACME Trading Co. LLC"        # enriched from reference data
+    assert doc1["fields"]["supplier_name"] == "ACME Trading Co. LLC"        # confirmed by reference data
     deadline = time.time() + 10
     while time.time() < deadline and len(posted) < 2:
         time.sleep(0.2)
@@ -169,6 +169,17 @@ def test_flow_validation_and_live_rules(client):
     assert client.delete(f"{DF}/flows/smart-inbox").status_code == 400
 
 
+def test_draft_takes_uploads_and_counts_this_month(client):
+    """The builder's step 2 uploads into a draft process (only bots and folders need it live); the process list
+    counts what came in this month."""
+    fid = client.post(f"{DF}/flows", json={"name": "Draft invoices", "docTypes": ["invoice"]}).json()["id"]
+    assert client.get(f"{DF}/flows/{fid}").json()["status"] == "draft"
+    d = up(client, fid, pdf([INV]), "inv.pdf")
+    assert d["documentId"]
+    st = next(f for f in client.get(f"{DF}/flows").json() if f["id"] == fid)["stats"]
+    assert st["thisMonth"] == 1 and st["total"] == 1
+
+
 def test_sla_webhook(client, monkeypatch):
     import docauto.api.app as appmod
     import docauto.docflow as dfm
@@ -182,3 +193,54 @@ def test_sla_webhook(client, monkeypatch):
     time.sleep(0.05)
     assert appmod.docflow().check_sla() == 1 and hits[-1]["event"] == "review.overdue"
     assert appmod.docflow().check_sla() == 0            # notified once
+
+
+def test_scanned_invoice_says_why_it_needs_review(client):
+    """samples/invoice_scan.png (Tesseract): the supplier comes from the page heading, the line items from the words'
+    layout, the subtotal is not doubted for its badly read label, and DocFlow says why the invoice needs a person."""
+    fid = client.post(f"{DF}/flows", json={"name": "Scanned invoices", "docTypes": ["invoice"]}).json()["id"]
+    r = client.post(f"{DF}/flows/{fid}/documents", params={"wait": "true"},
+                    files=[("files", ("invoice_scan.png", (SAMPLES / "invoice_scan.png").read_bytes(), "image/png"))])
+    doc_id = r.json()["documents"][0]["documentId"]
+    d = client.get(f"{DF}/documents/{doc_id}").json()
+    assert d["status"] == "validation" and d["flags"] == []
+    f, conf = d["fields"], d["confidence"]
+    assert f["supplier_name"] == "ACME Trading Co. LLC" and 0.5 < conf["supplier_name"] <= 0.75
+    assert d["locations"]["supplier_name"]["grounded"]
+    assert f["subtotal"] == 10000.0 and conf["subtotal"] >= 0.85
+    items = f["line_items"]
+    assert [(x["description"].split()[0], x["quantity"], x["amount"]) for x in items] == [("RPA", 2.0, 8000.0),
+                                                                                        ("Support", 1.0, 2000.0)]
+    assert all(row["grounded"] for row in d["locations"]["line_items"]["rows"])
+    reasons = d["reviewReasons"]
+    sup = next(x for x in reasons if x["field"] == "supplier_name")
+    assert sup["reason"] == "low_confidence" and sup["threshold"] == 0.85
+    assert sup["message"] == f"Confidence {round(sup['confidence'] * 100)}% is under the 85% needed"
+    assert not any(x["field"] == "subtotal" for x in reasons)
+    assert all(x["reason"] in ("low_confidence", "required_missing", "validation", "not_grounded", "check_failed",
+                               "document_confidence", "rule", "unclassified") for x in reasons)
+    res = client.get(f"/api/docs/v1/documents/{doc_id}/result").json()
+    assert res["review"]["reasons"] == reasons
+
+    # a result stored before reasons were kept: the scorer states them again, without changing the result
+    import docauto.api.app as appmod
+    store = appmod.service().store
+    old = store.get_result(doc_id)
+    old.review.reasons = []
+    store.save_result(old)
+    again = client.get(f"{DF}/documents/{doc_id}").json()
+    assert again["reviewReasons"] == reasons and again["confidence"] == d["confidence"]
+
+
+def test_rule_flags_are_review_reasons_and_reference_data_confirms_the_heading(client):
+    csv = "vat,name\n300123456700003,ACME Trading Co. LLC\n".encode()
+    client.post(f"{DF}/reftables", files={"file": ("suppliers.csv", csv, "text/csv")}, data={"name": "Suppliers"})
+    fid = client.post(f"{DF}/flows", json={"name": "AP", "docTypes": ["invoice"], "rules": [
+        {"type": "lookup", "name": "Known supplier", "params": {"field": "supplier_vat", "table": "suppliers", "column": "vat",
+                                                                "enrich": {"supplier_name": "name"}}},
+        {"type": "threshold", "name": "Large invoice", "params": {"field": "total", "op": ">", "value": 10000}}]}).json()["id"]
+    d = client.get(f"{DF}/documents/{up(client, fid, pdf([INV]))['documentId']}").json()
+    assert d["confidence"]["supplier_name"] == 1.0          # the heading guess, confirmed by the supplier master
+    assert d["status"] == "validation"
+    assert [(x["field"], x["reason"], x["rule"]) for x in d["reviewReasons"]] == [("total", "rule", "Large invoice")]
+    assert d["reviewReasons"][0]["message"] == "total 11,500.00 > 10,000.00"
