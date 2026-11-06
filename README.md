@@ -103,6 +103,9 @@ Then make them the defaults, e.g. `defaults.document_ocr: azure-di`, `defaults.e
 
 ### With the OOA platform (AI > Document Automation)
 
+What the Command Center relies on (routes, headers, callbacks, versions and how they may change) is in
+`PLATFORM-CONTRACT.md`; `tests/test_platform_contract.py` checks it.
+
 The OOA Command Center shows DocFlow's screens and forwards to it; set in `config/local.env`:
 
 | Setting | Value |
