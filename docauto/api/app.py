@@ -383,7 +383,9 @@ def post_update(_: str = Depends(auth)):
 @app.get(f"{API}/admin/installer.bat")
 def get_installer(_: str = Depends(auth)):
     from fastapi.responses import Response
-    from .. import updates
+    from .. import managed, updates
+    if managed.enabled():
+        raise HTTPException(409, managed.NO_SELF_UPDATE)
     v = updates.version_info()
     return Response(updates.installer_bat(v["repo"], v["ref"]), media_type="application/octet-stream",
                     headers={"Content-Disposition": 'attachment; filename="Install-OneOffice-DocFlow.bat"'})
@@ -499,7 +501,9 @@ def _drop(tenant: str) -> None:
 @app.on_event("startup")
 def _start_docflow():
     """DocFlow for every tenant that has data: folder watcher, outbox sender, housekeeping, and the job workers,
-    which resume jobs left queued or interrupted."""
+    which resume jobs left queued or interrupted. In managed mode it first insists on the service token."""
+    from .. import managed
+    managed.check_startup()
     for tenant in [tenants.DEFAULT, *tenants.known(_base_data_dir())]:
         token = tenants.current.set(tenant)
         try:

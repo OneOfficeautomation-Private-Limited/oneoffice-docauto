@@ -109,6 +109,7 @@ The OOA Command Center shows DocFlow's screens and forwards to it; set in `confi
 | --- | --- |
 | `DOCAUTO_API_TOKEN` | the service token; the same value goes in the Command Center's vault (Settings > Document Automation) |
 | `DOCAUTO_PLATFORM_URL` | the Command Center's address, for "Start a bot" deliveries and document events (`{tenant}` is replaced in SaaS) |
+| `DOCAUTO_MANAGED` | `true` when the OOA platform runs DocFlow (its installer, containers or SaaS): it will not start without `DOCAUTO_API_TOKEN`, does not update itself (the platform upgrades it), and `admin/version` does not show the install folder |
 
 With `DOCAUTO_PLATFORM_URL` set, DocFlow also tells the Command Center when a document in a process is processed,
 needs review, is approved or rejected, has a failed delivery, or is overdue for review (DESIGN.md §9.7). Events and
