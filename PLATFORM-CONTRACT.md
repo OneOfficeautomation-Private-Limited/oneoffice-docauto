@@ -117,8 +117,6 @@ Both go to `DOCAUTO_PLATFORM_URL` (in SaaS `{tenant}` in it is replaced by the t
 1. **Events endpoint missing on the platform.** DocFlow posts document events to `/api/docflow-callback/events`. The
    Command Center has no such route yet and answers 404, which DocFlow treats as final (no retries). Nothing breaks:
    the Command Center reads the review queue every 20 s instead. Adding the endpoint is a later phase.
-2. **`main` is behind.** The platform needs this `document-automation` branch: the platform "Start a bot" callback,
-   the email inbox settings, the test lab (`df/test`), names in any script and PostgreSQL storage are only here.
-   The first release (v3.1.0) should come from this branch after it is merged into `main`.
-3. **Open API without a token.** If `DOCAUTO_API_TOKEN` is not set, the API accepts every request. A managed mode
-   that refuses to start without a token is planned (phase 4).
+2. **Open API without a token in standalone installs.** If `DOCAUTO_API_TOKEN` is not set, the API accepts every
+   request. When the platform runs DocFlow it sets `DOCAUTO_MANAGED=true`. In that mode DocFlow refuses to start
+   without the token, does not update itself, and keeps its install folder out of `admin/version`.
