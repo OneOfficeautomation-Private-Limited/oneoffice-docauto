@@ -10,6 +10,7 @@ import os
 import re
 from pathlib import Path
 
+from . import managed
 from . import settings as settings_mod
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,8 +30,11 @@ def version_info() -> dict:
     repo = os.environ.get("DOCFLOW_REPO") or env.get("DOCFLOW_REPO", "") or installed.get("repo", "")
     ref = os.environ.get("DOCFLOW_REF") or env.get("DOCFLOW_REF", "") or installed.get("ref", "") or "main"
     commit = installed.get("commit", "")
+    if managed.enabled():   # the platform installs and upgrades it; the folder is nobody's business without a token
+        return {"version": version, "commit": commit[:7], "managed": True, "canUpdate": False}
     return {
         "version": version,
+        "managed": False,
         "commit": commit[:7],
         "installedAt": installed.get("installedAt", ""),
         "source": installed.get("source", ""),
@@ -44,6 +48,8 @@ def version_info() -> dict:
 
 def start_update() -> None:
     """Open the updater in its own console window (Windows). It stops this service and restarts it."""
+    if managed.enabled():
+        raise RuntimeError(managed.NO_SELF_UPDATE)
     if os.name != "nt":
         raise RuntimeError("one-click update is available on Windows installs; elsewhere run windows/get-docflow.ps1 or git pull")
     bat = WIN / "update.bat"
