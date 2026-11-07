@@ -39,3 +39,17 @@ def test_update_only_on_windows():
 
 def test_old_brand_assets_are_gone():
     assert client.get("/ui/brand/ooa-mark.svg").status_code == 404
+
+
+def test_version_without_the_version_file(monkeypatch, tmp_path):
+    """A container image or pip install may not have the VERSION file: the package's own version is reported, never
+    'dev' (the OOA Command Center compares it with the version it is tested with)."""
+    import docauto
+    from docauto import updates
+    monkeypatch.setattr(updates, "ROOT", tmp_path)
+    assert updates.version_info()["version"] == docauto.__version__
+
+
+def test_the_image_has_the_version_file():
+    from pathlib import Path
+    assert "COPY VERSION" in (Path(__file__).resolve().parent.parent / "Dockerfile").read_text(encoding="utf-8")

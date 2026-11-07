@@ -18,7 +18,9 @@ WIN = ROOT / "windows"
 
 
 def version_info() -> dict:
-    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else "dev"
+    # the package's own version when the VERSION file is not there (a container image or a pip install)
+    from . import __version__
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip() if (ROOT / "VERSION").exists() else __version__
     installed: dict = {}
     vf = ROOT / ".docflow-version"
     if vf.exists():

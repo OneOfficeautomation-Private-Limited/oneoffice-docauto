@@ -17,6 +17,7 @@ RUN if [ "$WITH_PADDLE" = "true" ]; then pip install --no-cache-dir paddleocr pa
     if [ "$WITH_AWS" = "true" ]; then pip install --no-cache-dir boto3; fi && \
     if [ "$WITH_GOOGLE" = "true" ]; then pip install --no-cache-dir google-cloud-documentai; fi
 
+COPY VERSION ./VERSION
 COPY docauto ./docauto
 COPY options ./options
 COPY config ./config
