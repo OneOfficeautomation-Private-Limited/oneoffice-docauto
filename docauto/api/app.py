@@ -17,7 +17,7 @@ from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, 
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-from .. import tenants
+from .. import __version__, tenants
 from ..config import load_config
 from ..errors import DocAutoError, InvalidInput, PolicyDenied, ProviderUnavailable, UnsupportedCapability
 from ..models import FieldSchema
@@ -25,7 +25,7 @@ from ..pipeline import DocumentService, ProcessOptions
 
 API = "/api/docs/v1"
 
-app = FastAPI(title="Oneoffice Document Automation", version="1.0.0",
+app = FastAPI(title="Oneoffice Document Automation", version=__version__,
               description="Pluggable OCR + IDP component: open-source, licensed/cloud and AI engine options.")
 app.add_middleware(tenants.TenantMiddleware)
 _services: dict[str, DocumentService] = {}   # one per tenant, each with its own data folder and routing
